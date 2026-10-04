@@ -47,6 +47,65 @@ impl PartialEq for IdCache {
 impl Eq for IdCache {}
 
 impl ProgramSupergraph {
+    /// Writes the compact JSON form, byte-identical to `serde_json::to_writer(self)`, but
+    /// serializes nodes, edges and indexes on separate threads.
+    pub fn write_json<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<()> {
+        fn to_error(error: serde_json::Error) -> std::io::Error {
+            std::io::Error::other(error)
+        }
+        fn serialize_chunk<T: Serialize>(items: &[T]) -> Result<Vec<u8>, serde_json::Error> {
+            let mut buffer = Vec::with_capacity(items.len() * 1024);
+            for (position, item) in items.iter().enumerate() {
+                if position > 0 {
+                    buffer.push(b',');
+                }
+                serde_json::to_writer(&mut buffer, item)?;
+            }
+            Ok(buffer)
+        }
+
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let node_chunk = self.nodes.len().div_ceil(threads).max(1024);
+        let edge_chunk = self.edges.len().div_ceil(threads).max(1024);
+        std::thread::scope(|scope| {
+            let nodes = self
+                .nodes
+                .chunks(node_chunk)
+                .map(|chunk| scope.spawn(move || serialize_chunk(chunk)))
+                .collect::<Vec<_>>();
+            let edges = self
+                .edges
+                .chunks(edge_chunk)
+                .map(|chunk| scope.spawn(move || serialize_chunk(chunk)))
+                .collect::<Vec<_>>();
+            let indexes = scope.spawn(|| serde_json::to_vec(&self.indexes));
+
+            out.write_all(b"{\"schema_version\":")?;
+            serde_json::to_writer(&mut *out, &self.schema_version)?;
+            out.write_all(b",\"language\":")?;
+            serde_json::to_writer(&mut *out, &self.language)?;
+            out.write_all(b",\"root\":")?;
+            serde_json::to_writer(&mut *out, &self.root)?;
+            for (name, parts) in [("nodes", nodes), ("edges", edges)] {
+                out.write_all(b",\"")?;
+                out.write_all(name.as_bytes())?;
+                out.write_all(b"\":[")?;
+                for (position, part) in parts.into_iter().enumerate() {
+                    let bytes = part.join().expect("serializer thread").map_err(to_error)?;
+                    if position > 0 && !bytes.is_empty() {
+                        out.write_all(b",")?;
+                    }
+                    out.write_all(&bytes)?;
+                }
+                out.write_all(b"]")?;
+            }
+            out.write_all(b",\"indexes\":")?;
+            let indexes = indexes.join().expect("serializer thread").map_err(to_error)?;
+            out.write_all(&indexes)?;
+            out.write_all(b"}")
+        })
+    }
+
     pub(crate) fn invalidate_id_cache(&mut self) {
         self.id_cache = IdCache::default();
     }

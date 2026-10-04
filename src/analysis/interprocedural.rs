@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ast::SourceSpan;
 use crate::supergraph::{
@@ -7,7 +7,10 @@ use crate::supergraph::{
     ProgramSupergraph, Resolution, Severity, ValueRole,
 };
 
-use super::{edge_id, graph_edge, graph_node, inference_evidence, insert_edge, insert_node};
+use super::{
+    callable_index::CallableIndex, edge_id, graph_edge, graph_node, inference_evidence, insert_edge,
+    insert_node,
+};
 
 const SG080_EXACT_PRECISION: &str = "sg080-actual-argument-to-formal-parameter-value";
 const SG080_POSSIBLE_PRECISION: &str =
@@ -42,6 +45,7 @@ const SG084_CALLER_EXCEPTIONAL_EXIT_PRECISION: &str =
     "sg084-callee-unhandled-exception-value-to-caller-exceptional-exit";
 
 pub(crate) fn emit(graph: &mut ProgramSupergraph) {
+    let callable_index = CallableIndex::build(graph);
     let mut callables = BTreeMap::new();
     let mut call_sites = BTreeMap::new();
     let mut parameter_values = BTreeMap::<(NodeId, String), NodeId>::new();
@@ -501,7 +505,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                     value_spans_by_id.get(exception_id).copied(),
                 );
                 let destinations =
-                    exception_destinations(graph, &callee_id, exception_id, summary.span);
+                    exception_destinations(graph, &callable_index, &callee_id, exception_id, summary.span);
                 for handler_id in &destinations.callee_handlers {
                     add_throws_to(
                         graph,
@@ -544,7 +548,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                             sg::ThrowsToTargetKind::CallExceptionalValue,
                             &summary,
                         );
-                        match caller_exception_destination(graph, call_site) {
+                        match caller_exception_destination(graph, &callable_index, call_site) {
                             Some(CallerExceptionDestination::Handler(handler_id)) => {
                                 add_throws_to(
                                     graph,
@@ -1382,29 +1386,33 @@ fn throws_to_confidence(calls: &sg::Calls) -> (Confidence, &'static str) {
 
 fn exception_destinations(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     callee_id: &str,
     exception_id: &str,
     exception_span: Option<SourceSpan>,
 ) -> ExceptionDestinations {
     let Some(raise_node_id) = exception_span.and_then(|span| {
-        cfg_node_at_span(graph, callee_id, span, Some(ControlFlowNodeRole::Raise))
+        cfg_node_at_span(
+            graph,
+            index,
+            callee_id,
+            span,
+            Some(ControlFlowNodeRole::Raise),
+        )
     }) else {
         return ExceptionDestinations::default();
     };
-    let callee_exceptional_exit = exceptional_exit_for_callable(graph, callee_id);
+    let callee_exceptional_exit = exceptional_exit_for_callable(graph, index, callee_id);
     let reaches_callee_exceptional_exit = callee_exceptional_exit
         .as_deref()
-        .is_some_and(|exit_id| cfg_reachable(graph, callee_id, &raise_node_id, exit_id));
-    let mut callee_handlers = graph
-        .edges
-        .iter()
+        .is_some_and(|exit_id| cfg_reachable(graph, index, callee_id, &raise_node_id, exit_id));
+    let mut callee_handlers = index
+        .control_flow_edges(graph, callee_id)
         .filter_map(|edge| {
             let EdgeFact::ControlFlow(flow) = &edge.fact else {
                 return None;
             };
-            if flow.callable_id == callee_id
-                && edge.source_id == raise_node_id
-                && flow.outcome == sg::ControlFlowOutcome::Exception
+            if edge.source_id == raise_node_id && flow.outcome == sg::ControlFlowOutcome::Exception
             {
                 edge.target_id.clone()
             } else {
@@ -1432,69 +1440,73 @@ fn exception_destinations(
 
 fn caller_exception_destination(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     call_site: &sg::CallSite,
 ) -> Option<CallerExceptionDestination> {
-    caller_handler_for_call_site(graph, call_site)
+    caller_handler_for_call_site(graph, index, call_site)
         .map(CallerExceptionDestination::Handler)
         .or_else(|| {
-            exceptional_exit_for_callable(graph, &call_site.enclosing_callable_id)
+            exceptional_exit_for_callable(graph, index, &call_site.enclosing_callable_id)
                 .map(CallerExceptionDestination::ExceptionalExit)
         })
 }
 
 fn caller_handler_for_call_site(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     call_site: &sg::CallSite,
 ) -> Option<NodeId> {
     let statement_id = smallest_statement_containing_span(
         graph,
+        index,
         &call_site.enclosing_callable_id,
         call_site.span,
     )?;
-    graph.nodes.iter().find_map(|node| {
-        let NodeFact::Condition(condition) = &node.fact else {
-            return None;
-        };
-        if condition.callable_id != call_site.enclosing_callable_id
-            || condition.kind != sg::ConditionKind::ExceptionRegion
-        {
-            return None;
-        }
-        let protects_call = condition.regions.iter().any(|region| {
-            region.kind == ControlRegionKind::TryBody
-                && region.statement_ids.contains(&statement_id)
-        });
-        if !protects_call {
-            return None;
-        }
-        let handler_statement_id = condition
-            .regions
-            .iter()
-            .find(|region| region.kind == ControlRegionKind::CatchBody)?
-            .statement_ids
-            .first()?;
-        cfg_node_for_statement_id(
-            graph,
-            &call_site.enclosing_callable_id,
-            handler_statement_id,
-        )
-    })
+    index
+        .nodes(graph, &call_site.enclosing_callable_id)
+        .find_map(|node| {
+            let NodeFact::Condition(condition) = &node.fact else {
+                return None;
+            };
+            if condition.kind != sg::ConditionKind::ExceptionRegion {
+                return None;
+            }
+            let protects_call = condition.regions.iter().any(|region| {
+                region.kind == ControlRegionKind::TryBody
+                    && region.statement_ids.contains(&statement_id)
+            });
+            if !protects_call {
+                return None;
+            }
+            let handler_statement_id = condition
+                .regions
+                .iter()
+                .find(|region| region.kind == ControlRegionKind::CatchBody)?
+                .statement_ids
+                .first()?;
+            cfg_node_for_statement_id(
+                graph,
+                index,
+                &call_site.enclosing_callable_id,
+                handler_statement_id,
+            )
+        })
 }
 
 fn smallest_statement_containing_span(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     callable_id: &str,
     span: SourceSpan,
 ) -> Option<NodeId> {
-    graph
-        .nodes
-        .iter()
+    index
+        .nodes(graph, callable_id)
         .filter_map(|node| {
             let NodeFact::Statement(statement) = &node.fact else {
                 return None;
             };
             let node_span = node.span?;
-            if statement.callable_id == callable_id && span_contains(node_span, span) {
+            if span_contains(node_span, span) {
                 Some((
                     node_span.end_byte.saturating_sub(node_span.start_byte),
                     statement.statement_id.clone(),
@@ -1509,18 +1521,19 @@ fn smallest_statement_containing_span(
 
 fn cfg_node_for_statement_id(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     callable_id: &str,
     statement_id: &str,
 ) -> Option<NodeId> {
-    let statement_span = graph.nodes.iter().find_map(|node| {
+    let statement_span = index.nodes(graph, callable_id).find_map(|node| {
         let NodeFact::Statement(statement) = &node.fact else {
             return None;
         };
-        (statement.callable_id == callable_id && statement.statement_id == statement_id)
-            .then_some(node.span?)
+        (statement.statement_id == statement_id).then_some(node.span?)
     })?;
     cfg_node_at_span(
         graph,
+        index,
         callable_id,
         statement_span,
         Some(ControlFlowNodeRole::Statement),
@@ -1529,30 +1542,32 @@ fn cfg_node_for_statement_id(
 
 fn cfg_node_at_span(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     callable_id: &str,
     span: SourceSpan,
     role: Option<ControlFlowNodeRole>,
 ) -> Option<NodeId> {
-    graph.nodes.iter().find_map(|node| {
+    index.nodes(graph, callable_id).find_map(|node| {
         let NodeFact::ControlFlow(control) = &node.fact else {
             return None;
         };
-        if control.callable_id == callable_id && node.span == Some(span) {
-            if role.is_none_or(|role| control.role == role) {
-                return Some(control.cfg_node_id.clone());
-            }
+        if node.span == Some(span) && role.is_none_or(|role| control.role == role) {
+            return Some(control.cfg_node_id.clone());
         }
         None
     })
 }
 
-fn exceptional_exit_for_callable(graph: &ProgramSupergraph, callable_id: &str) -> Option<NodeId> {
-    graph.nodes.iter().find_map(|node| {
+fn exceptional_exit_for_callable(
+    graph: &ProgramSupergraph,
+    index: &CallableIndex,
+    callable_id: &str,
+) -> Option<NodeId> {
+    index.nodes(graph, callable_id).find_map(|node| {
         let NodeFact::ControlFlow(control) = &node.fact else {
             return None;
         };
-        if control.callable_id == callable_id
-            && control.role == ControlFlowNodeRole::Exit
+        if control.role == ControlFlowNodeRole::Exit
             && control.semantic_kind.as_deref() == Some("ExceptionalExit")
         {
             Some(control.cfg_node_id.clone())
@@ -1564,29 +1579,31 @@ fn exceptional_exit_for_callable(graph: &ProgramSupergraph, callable_id: &str) -
 
 fn cfg_reachable(
     graph: &ProgramSupergraph,
+    index: &CallableIndex,
     callable_id: &str,
     source_id: &str,
     target_id: &str,
 ) -> bool {
-    let mut seen = BTreeSet::new();
-    let mut frontier = vec![source_id.to_string()];
+    let mut successors = HashMap::<&str, Vec<&str>>::new();
+    for edge in index.control_flow_edges(graph, callable_id) {
+        if let Some(next) = &edge.target_id {
+            successors
+                .entry(edge.source_id.as_str())
+                .or_default()
+                .push(next.as_str());
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut frontier = vec![source_id];
     while let Some(node_id) = frontier.pop() {
         if node_id == target_id {
             return true;
         }
-        if !seen.insert(node_id.clone()) {
+        if !seen.insert(node_id) {
             continue;
         }
-        for edge in &graph.edges {
-            let EdgeFact::ControlFlow(flow) = &edge.fact else {
-                continue;
-            };
-            if flow.callable_id == callable_id
-                && edge.source_id == node_id
-                && let Some(next) = &edge.target_id
-            {
-                frontier.push(next.clone());
-            }
+        if let Some(next) = successors.get(node_id) {
+            frontier.extend(next.iter().copied());
         }
     }
     false

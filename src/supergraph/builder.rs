@@ -1192,186 +1192,285 @@ pub fn source_owner(
     }
 }
 
+/// Runs `work` over contiguous chunks of `items` on scoped threads. Chunks are disjoint, so
+/// the result is identical to a sequential pass when `work` only touches its own items.
+pub(crate) fn par_chunks_mut<T: Send>(items: &mut [T], work: impl Fn(&mut [T]) + Sync) {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let chunk_size = items.len().div_ceil(threads).max(2048);
+    if items.len() <= chunk_size {
+        work(items);
+        return;
+    }
+    let work = &work;
+    std::thread::scope(|scope| {
+        for chunk in items.chunks_mut(chunk_size) {
+            scope.spawn(move || work(chunk));
+        }
+    });
+}
+
 pub fn sort_graph(graph: &mut ProgramSupergraph) {
-    for node in &mut graph.nodes {
-        sort_evidence(&mut node.evidence);
-    }
-    for edge in &mut graph.edges {
-        sort_evidence(&mut edge.evidence);
-    }
-    graph
-        .nodes
-        .sort_by(|left, right| left.node_id.cmp(&right.node_id));
-    graph
-        .edges
-        .sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
+    par_chunks_mut(&mut graph.nodes, |nodes| {
+        for node in nodes {
+            sort_evidence(&mut node.evidence);
+        }
+    });
+    par_chunks_mut(&mut graph.edges, |edges| {
+        for edge in edges {
+            sort_evidence(&mut edge.evidence);
+        }
+    });
+    let ProgramSupergraph { nodes, edges, .. } = graph;
+    std::thread::scope(|scope| {
+        scope.spawn(|| nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id)));
+        edges.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
+    });
 }
 
 pub fn build_indexes(nodes: &[GraphNode], edges: &[GraphEdge]) -> GraphIndexes {
+    // Each group fills a disjoint set of maps, so the groups can be built concurrently.
+    let (node_a, node_b, node_c, node_d, edge_p, edge_a, edge_o, edge_i, edge_c) = std::thread::scope(|scope| {
+        let node_a = scope.spawn(|| build_node_indexes(nodes, 0));
+        let node_b = scope.spawn(|| build_node_indexes(nodes, 1));
+        let node_c = scope.spawn(|| build_node_indexes(nodes, 2));
+        let node_d = scope.spawn(|| build_node_indexes(nodes, 3));
+        let edge_p = scope.spawn(|| build_edge_indexes(edges, 0));
+        let edge_a = scope.spawn(|| build_edge_indexes(edges, 1));
+        let edge_o = scope.spawn(|| build_edge_indexes(edges, 2));
+        let edge_i = scope.spawn(|| build_edge_indexes(edges, 3));
+        let edge_c = build_edge_indexes(edges, 4);
+        (
+            node_a.join().expect("node index thread"),
+            node_b.join().expect("node index thread"),
+            node_c.join().expect("node index thread"),
+            node_d.join().expect("node index thread"),
+            edge_p.join().expect("edge index thread"),
+            edge_a.join().expect("edge index thread"),
+            edge_o.join().expect("edge index thread"),
+            edge_i.join().expect("edge index thread"),
+            edge_c,
+        )
+    });
+    GraphIndexes {
+        node_position_by_id: node_a.node_position_by_id,
+        nodes_by_kind: node_a.nodes_by_kind,
+        nodes_by_uncertainty: node_a.nodes_by_uncertainty,
+        source_span_to_nodes: node_b.source_span_to_nodes,
+        artifact_to_nodes: node_c.artifact_to_nodes,
+        callable_to_nodes: node_c.callable_to_nodes,
+        owner_to_nodes: node_c.owner_to_nodes,
+        symbol_to_definitions: node_d.symbol_to_definitions,
+        symbol_to_uses: node_d.symbol_to_uses,
+        edge_position_by_id: edge_p.edge_position_by_id,
+        edges_by_kind: edge_a.edges_by_kind,
+        edges_by_uncertainty: edge_a.edges_by_uncertainty,
+        owner_to_edges: edge_a.owner_to_edges,
+        outgoing_edges_by_node: edge_o.outgoing_edges_by_node,
+        incoming_edges_by_node: edge_i.incoming_edges_by_node,
+        outgoing_edges_by_node_and_kind: edge_o.outgoing_edges_by_node_and_kind,
+        incoming_edges_by_node_and_kind: edge_i.incoming_edges_by_node_and_kind,
+        requirement_to_code: edge_c.requirement_to_code,
+        code_to_requirements: edge_c.code_to_requirements,
+        requirement_to_domain_knowledge: edge_c.requirement_to_domain_knowledge,
+        domain_knowledge_to_requirements: edge_c.domain_knowledge_to_requirements,
+        calls_by_caller: edge_c.calls_by_caller,
+        calls_by_concrete_target: edge_c.calls_by_concrete_target,
+        call_site_to_calls: edge_c.call_site_to_calls,
+        caller_to_concrete_target_calls: edge_c.caller_to_concrete_target_calls,
+        caller_to_concrete_call_targets: edge_c.caller_to_concrete_call_targets,
+    }
+}
+
+/// Builds the node-derived maps of one group (0..=3); every other map stays empty.
+fn build_node_indexes(nodes: &[GraphNode], group: u8) -> GraphIndexes {
     let mut indexes = GraphIndexes::default();
-
     for (position, node) in nodes.iter().enumerate() {
-        indexes
-            .node_position_by_id
-            .insert(node.node_id.clone(), position);
-        indexes
-            .nodes_by_kind
-            .entry(node.kind)
-            .or_default()
-            .push(node.node_id.clone());
-        indexes
-            .nodes_by_uncertainty
-            .entry(node.uncertainty)
-            .or_default()
-            .push(node.node_id.clone());
-        if let Some(span) = node.span {
-            indexes
-                .source_span_to_nodes
-                .entry(SourceSpanIndexKey {
-                    artifact_id: node.owner.artifact_id.clone(),
-                    span,
-                })
-                .or_default()
-                .push(node.node_id.clone());
-        }
-        if let Some(artifact_id) = &node.owner.artifact_id {
-            indexes
-                .artifact_to_nodes
-                .entry(artifact_id.clone())
-                .or_default()
-                .push(node.node_id.clone());
-        }
-        if let Some(callable_id) = &node.owner.callable_id {
-            indexes
-                .callable_to_nodes
-                .entry(callable_id.clone())
-                .or_default()
-                .push(node.node_id.clone());
-        }
-        match &node.fact {
-            NodeFact::Definition(definition) => {
-                if let Some(symbol_id) = &definition.symbol_id {
+        match group {
+            0 => {
+                indexes
+                    .node_position_by_id
+                    .insert(node.node_id.clone(), position);
+                indexes
+                    .nodes_by_kind
+                    .entry(node.kind)
+                    .or_default()
+                    .push(node.node_id.clone());
+                indexes
+                    .nodes_by_uncertainty
+                    .entry(node.uncertainty)
+                    .or_default()
+                    .push(node.node_id.clone());
+            }
+            1 => {
+                if let Some(span) = node.span {
                     indexes
-                        .symbol_to_definitions
-                        .entry(symbol_id.clone())
+                        .source_span_to_nodes
+                        .entry(SourceSpanIndexKey {
+                            artifact_id: node.owner.artifact_id.clone(),
+                            span,
+                        })
                         .or_default()
                         .push(node.node_id.clone());
                 }
             }
-            NodeFact::Use(use_fact) => {
-                if let Some(symbol_id) = &use_fact.symbol_id {
+            2 => {
+                if let Some(artifact_id) = &node.owner.artifact_id {
                     indexes
-                        .symbol_to_uses
-                        .entry(symbol_id.clone())
+                        .artifact_to_nodes
+                        .entry(artifact_id.clone())
                         .or_default()
                         .push(node.node_id.clone());
                 }
+                if let Some(callable_id) = &node.owner.callable_id {
+                    indexes
+                        .callable_to_nodes
+                        .entry(callable_id.clone())
+                        .or_default()
+                        .push(node.node_id.clone());
+                }
+                push_owner_node(&mut indexes.owner_to_nodes, &node.owner, &node.node_id);
             }
-            _ => {}
+            _ => match &node.fact {
+                NodeFact::Definition(definition) => {
+                    if let Some(symbol_id) = &definition.symbol_id {
+                        indexes
+                            .symbol_to_definitions
+                            .entry(symbol_id.clone())
+                            .or_default()
+                            .push(node.node_id.clone());
+                    }
+                }
+                NodeFact::Use(use_fact) => {
+                    if let Some(symbol_id) = &use_fact.symbol_id {
+                        indexes
+                            .symbol_to_uses
+                            .entry(symbol_id.clone())
+                            .or_default()
+                            .push(node.node_id.clone());
+                    }
+                }
+                _ => {}
+            },
         }
-        push_owner_node(&mut indexes.owner_to_nodes, &node.owner, &node.node_id);
     }
+    dedup_indexes(&mut indexes);
+    indexes
+}
 
+/// Builds the edge-derived maps of one group (0..=4); every other map stays empty.
+fn build_edge_indexes(edges: &[GraphEdge], group: u8) -> GraphIndexes {
+    let mut indexes = GraphIndexes::default();
     for (position, edge) in edges.iter().enumerate() {
-        indexes
-            .edge_position_by_id
-            .insert(edge.edge_id.clone(), position);
-        indexes
-            .edges_by_kind
-            .entry(edge.kind)
-            .or_default()
-            .push(edge.edge_id.clone());
-        indexes
-            .edges_by_uncertainty
-            .entry(edge.uncertainty)
-            .or_default()
-            .push(edge.edge_id.clone());
-        indexes
-            .outgoing_edges_by_node
-            .entry(edge.source_id.clone())
-            .or_default()
-            .push(edge.edge_id.clone());
-        indexes
-            .outgoing_edges_by_node_and_kind
-            .entry(edge.source_id.clone())
-            .or_default()
-            .entry(edge.kind)
-            .or_default()
-            .push(edge.edge_id.clone());
-        if let Some(target_id) = &edge.target_id {
-            indexes
-                .incoming_edges_by_node
-                .entry(target_id.clone())
-                .or_default()
-                .push(edge.edge_id.clone());
-            indexes
-                .incoming_edges_by_node_and_kind
-                .entry(target_id.clone())
-                .or_default()
-                .entry(edge.kind)
-                .or_default()
-                .push(edge.edge_id.clone());
-        }
-        push_owner_edge(&mut indexes.owner_to_edges, &edge.owner, &edge.edge_id);
-        if let EdgeFact::TracesTo(trace) = &edge.fact {
-            indexes
-                .requirement_to_code
-                .entry(trace.requirement_id.clone())
-                .or_default()
-                .push(trace.code_fact_id.clone());
-            indexes
-                .code_to_requirements
-                .entry(trace.code_fact_id.clone())
-                .or_default()
-                .push(trace.requirement_id.clone());
-        }
-        if let EdgeFact::DependsOnDomainKnowledge(dependency) = &edge.fact {
-            indexes
-                .requirement_to_domain_knowledge
-                .entry(dependency.requirement_id.clone())
-                .or_default()
-                .push(dependency.domain_knowledge_id.clone());
-            indexes
-                .domain_knowledge_to_requirements
-                .entry(dependency.domain_knowledge_id.clone())
-                .or_default()
-                .push(dependency.requirement_id.clone());
-        }
-        if let EdgeFact::Calls(calls) = &edge.fact {
-            indexes
-                .calls_by_caller
-                .entry(calls.caller_callable_id.clone())
-                .or_default()
-                .push(edge.edge_id.clone());
-            if let Some(target_id) = edge.target_id.as_ref() {
+        match group {
+            0 => {
                 indexes
-                    .calls_by_concrete_target
-                    .entry(target_id.clone())
+                    .edge_position_by_id
+                    .insert(edge.edge_id.clone(), position);
+            }
+            1 => {
+                indexes
+                    .edges_by_kind
+                    .entry(edge.kind)
+                    .or_default()
+                    .push(edge.edge_id.clone());
+                indexes
+                    .edges_by_uncertainty
+                    .entry(edge.uncertainty)
+                    .or_default()
+                    .push(edge.edge_id.clone());
+                push_owner_edge(&mut indexes.owner_to_edges, &edge.owner, &edge.edge_id);
+            }
+            2 => {
+                indexes
+                    .outgoing_edges_by_node
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .push(edge.edge_id.clone());
+                indexes
+                    .outgoing_edges_by_node_and_kind
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .entry(edge.kind)
                     .or_default()
                     .push(edge.edge_id.clone());
             }
-            indexes
-                .call_site_to_calls
-                .entry(calls.call_site_id.clone())
-                .or_default()
-                .push(edge.edge_id.clone());
-            if let Some(target_id) = edge.target_id.as_ref() {
-                indexes
-                    .caller_to_concrete_target_calls
-                    .entry(calls.caller_callable_id.clone())
-                    .or_default()
-                    .entry(target_id.clone())
-                    .or_default()
-                    .push(edge.edge_id.clone());
-                indexes
-                    .caller_to_concrete_call_targets
-                    .entry(calls.caller_callable_id.clone())
-                    .or_default()
-                    .push(target_id.clone());
+            3 => {
+                if let Some(target_id) = &edge.target_id {
+                    indexes
+                        .incoming_edges_by_node
+                        .entry(target_id.clone())
+                        .or_default()
+                        .push(edge.edge_id.clone());
+                    indexes
+                        .incoming_edges_by_node_and_kind
+                        .entry(target_id.clone())
+                        .or_default()
+                        .entry(edge.kind)
+                        .or_default()
+                        .push(edge.edge_id.clone());
+                }
+            }
+            _ => {
+                if let EdgeFact::TracesTo(trace) = &edge.fact {
+                    indexes
+                        .requirement_to_code
+                        .entry(trace.requirement_id.clone())
+                        .or_default()
+                        .push(trace.code_fact_id.clone());
+                    indexes
+                        .code_to_requirements
+                        .entry(trace.code_fact_id.clone())
+                        .or_default()
+                        .push(trace.requirement_id.clone());
+                }
+                if let EdgeFact::DependsOnDomainKnowledge(dependency) = &edge.fact {
+                    indexes
+                        .requirement_to_domain_knowledge
+                        .entry(dependency.requirement_id.clone())
+                        .or_default()
+                        .push(dependency.domain_knowledge_id.clone());
+                    indexes
+                        .domain_knowledge_to_requirements
+                        .entry(dependency.domain_knowledge_id.clone())
+                        .or_default()
+                        .push(dependency.requirement_id.clone());
+                }
+                if let EdgeFact::Calls(calls) = &edge.fact {
+                    indexes
+                        .calls_by_caller
+                        .entry(calls.caller_callable_id.clone())
+                        .or_default()
+                        .push(edge.edge_id.clone());
+                    if let Some(target_id) = edge.target_id.as_ref() {
+                        indexes
+                            .calls_by_concrete_target
+                            .entry(target_id.clone())
+                            .or_default()
+                            .push(edge.edge_id.clone());
+                    }
+                    indexes
+                        .call_site_to_calls
+                        .entry(calls.call_site_id.clone())
+                        .or_default()
+                        .push(edge.edge_id.clone());
+                    if let Some(target_id) = edge.target_id.as_ref() {
+                        indexes
+                            .caller_to_concrete_target_calls
+                            .entry(calls.caller_callable_id.clone())
+                            .or_default()
+                            .entry(target_id.clone())
+                            .or_default()
+                            .push(edge.edge_id.clone());
+                        indexes
+                            .caller_to_concrete_call_targets
+                            .entry(calls.caller_callable_id.clone())
+                            .or_default()
+                            .push(target_id.clone());
+                    }
+                }
             }
         }
     }
-
     dedup_indexes(&mut indexes);
     indexes
 }
@@ -1436,29 +1535,41 @@ pub fn refresh_provenance(graph: &mut ProgramSupergraph) {
         })
         .collect::<BTreeMap<_, _>>();
 
-    for node in &mut graph.nodes {
-        enrich_evidence(&mut node.evidence, &node.owner, node.span, &artifacts);
-    }
-    for edge in &mut graph.edges {
-        enrich_evidence(&mut edge.evidence, &edge.owner, edge.span, &artifacts);
-    }
+    par_chunks_mut(&mut graph.nodes, |nodes| {
+        for node in nodes {
+            enrich_evidence(&mut node.evidence, &node.owner, node.span, &artifacts);
+        }
+    });
+    par_chunks_mut(&mut graph.edges, |edges| {
+        for edge in edges {
+            enrich_evidence(&mut edge.evidence, &edge.owner, edge.span, &artifacts);
+        }
+    });
 }
 
 pub fn refresh_fact_identity(graph: &mut ProgramSupergraph) {
-    let mut payload_writer = StableHashWriter::new();
-    for node in &mut graph.nodes {
-        sort_evidence(&mut node.evidence);
-        node.payload_hash =
-            stable_payload_hash_with_writer(&NodeIdentityPayload { node }, &mut payload_writer);
-        node.fact_id = stable_id("fact", &[&node.node_id, &node.payload_hash]);
-    }
-
-    for edge in &mut graph.edges {
-        sort_evidence(&mut edge.evidence);
-        edge.payload_hash =
-            stable_payload_hash_with_writer(&EdgeIdentityPayload { edge }, &mut payload_writer);
-        edge.fact_id = stable_id("fact", &[&edge.edge_id, &edge.payload_hash]);
-    }
+    par_chunks_mut(&mut graph.nodes, |nodes| {
+        let mut payload_writer = StableHashWriter::new();
+        for node in nodes {
+            sort_evidence(&mut node.evidence);
+            node.payload_hash = stable_payload_hash_with_writer(
+                &NodeIdentityPayload { node },
+                &mut payload_writer,
+            );
+            node.fact_id = stable_id("fact", &[&node.node_id, &node.payload_hash]);
+        }
+    });
+    par_chunks_mut(&mut graph.edges, |edges| {
+        let mut payload_writer = StableHashWriter::new();
+        for edge in edges {
+            sort_evidence(&mut edge.evidence);
+            edge.payload_hash = stable_payload_hash_with_writer(
+                &EdgeIdentityPayload { edge },
+                &mut payload_writer,
+            );
+            edge.fact_id = stable_id("fact", &[&edge.edge_id, &edge.payload_hash]);
+        }
+    });
 }
 
 struct NodeIdentityPayload<'a> {

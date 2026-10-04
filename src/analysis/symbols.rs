@@ -77,9 +77,72 @@ impl ScopedStatements {
     }
 }
 
+/// Scope spans of one artifact ordered by width (ties by scope order), with a bottom-up
+/// min-start / max-end summary so the narrowest scope containing a span is found without
+/// testing every scope. Ancestors and overlapping blocks are handled uniformly.
+#[derive(Default)]
+struct ScopeTree {
+    spans: Vec<SourceSpan>,
+    scope_ids: Vec<NodeId>,
+    /// Segment tree over `spans`: (minimum start_byte, maximum end_byte) per node.
+    summary: Vec<(usize, usize)>,
+    size: usize,
+}
+
+impl ScopeTree {
+    fn build(scopes: &[&ScopeInfo]) -> Self {
+        let mut order = scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(position, scope)| Some((position, scope.span?, scope.scope_id.clone())))
+            .collect::<Vec<_>>();
+        order.sort_by_key(|(position, span, _)| {
+            (span.end_byte.saturating_sub(span.start_byte), *position)
+        });
+        let size = order.len().next_power_of_two().max(1);
+        let mut summary = vec![(usize::MAX, 0usize); size * 2];
+        for (index, (_, span, _)) in order.iter().enumerate() {
+            summary[size + index] = (span.start_byte, span.end_byte);
+        }
+        for node in (1..size).rev() {
+            let (left, right) = (summary[node * 2], summary[node * 2 + 1]);
+            summary[node] = (left.0.min(right.0), left.1.max(right.1));
+        }
+        ScopeTree {
+            spans: order.iter().map(|(_, span, _)| *span).collect(),
+            scope_ids: order.into_iter().map(|(_, _, scope_id)| scope_id).collect(),
+            summary,
+            size,
+        }
+    }
+
+    /// First scope in (width, order) order whose span contains `span`.
+    fn innermost(&self, span: SourceSpan) -> Option<&NodeId> {
+        if self.spans.is_empty() {
+            return None;
+        }
+        self.first_containing(1, span).map(|index| &self.scope_ids[index])
+    }
+
+    fn first_containing(&self, node: usize, span: SourceSpan) -> Option<usize> {
+        let (min_start, max_end) = self.summary[node];
+        if min_start > span.start_byte || max_end < span.end_byte {
+            return None;
+        }
+        if node >= self.size {
+            let index = node - self.size;
+            return (index < self.spans.len() && span_contains(self.spans[index], span))
+                .then_some(index);
+        }
+        self.first_containing(node * 2, span)
+            .or_else(|| self.first_containing(node * 2 + 1, span))
+    }
+}
+
 struct LexicalTables {
     scopes: BTreeMap<NodeId, ScopeInfo>,
     scope_ids_by_artifact: HashMap<NodeId, Vec<NodeId>>,
+    scope_trees: HashMap<NodeId, ScopeTree>,
     symbols_by_id: HashMap<NodeId, sg::Symbol>,
     statements_by_callable: HashMap<NodeId, Vec<(SourceSpan, NodeId)>>,
     scoped_statements: ScopedStatements,
@@ -122,9 +185,21 @@ impl LexicalTables {
                 .push(scope.scope_id.clone());
         }
 
+        let scope_trees = scope_ids_by_artifact
+            .iter()
+            .map(|(artifact_id, scope_ids)| {
+                let infos = scope_ids
+                    .iter()
+                    .filter_map(|scope_id| scopes.get(scope_id))
+                    .collect::<Vec<_>>();
+                (artifact_id.clone(), ScopeTree::build(&infos))
+            })
+            .collect::<HashMap<_, _>>();
+
         let mut tables = Self {
             scopes,
             scope_ids_by_artifact,
+            scope_trees,
             symbols_by_id: HashMap::new(),
             statements_by_callable: HashMap::new(),
             scoped_statements: ScopedStatements::default(),
@@ -231,6 +306,13 @@ impl LexicalTables {
     }
 
     fn binding_scope_for_span(&self, artifact_id: &str, span: SourceSpan) -> Option<NodeId> {
+        if let Some(scope_id) = self
+            .scope_trees
+            .get(artifact_id)
+            .and_then(|tree| tree.innermost(span))
+        {
+            return Some(self.normalize_binding_scope(scope_id));
+        }
         let artifact_scopes = self
             .scope_ids_by_artifact
             .get(artifact_id)

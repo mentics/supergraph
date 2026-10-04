@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -8,6 +9,10 @@ use supergraph::{
     analyze_typescript_path, analyze_typescript_supergraph,
 };
 use serde::Serialize;
+use supergraph::supergraph::ProgramSupergraph;
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Parser)]
 #[command(name = "supergraph", about = "Build program supergraphs from source code")]
@@ -59,7 +64,10 @@ fn main() -> Result<()> {
                 Language::Rust => analyze_rust_supergraph(&path)?,
                 Language::Typescript => analyze_typescript_supergraph(&path)?,
             };
-            emit(&graph, output, pretty)
+            let r = emit_graph(&graph, output, pretty);
+            // The process is about to exit; skip freeing the (very large) graph.
+            std::mem::forget(graph);
+            r
         }
         Command::Ast { language, path, output, pretty } => {
             let project = match language {
@@ -83,6 +91,30 @@ fn emit<T: Serialize>(value: &T, output: Option<PathBuf>, pretty: bool) -> Resul
             .with_context(|| format!("failed to write {}", path.display())),
         None => {
             println!("{json}");
+            Ok(())
+        }
+    }
+}
+
+fn emit_graph(graph: &ProgramSupergraph, output: Option<PathBuf>, pretty: bool) -> Result<()> {
+    if pretty {
+        return emit(graph, output, pretty);
+    }
+    match output {
+        Some(path) => {
+            let file = fs::File::create(&path)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+            let mut writer = BufWriter::with_capacity(1 << 20, file);
+            graph.write_json(&mut writer)?;
+            writer.flush()?;
+            Ok(())
+        }
+        None => {
+            let stdout = std::io::stdout();
+            let mut writer = BufWriter::with_capacity(1 << 20, stdout.lock());
+            graph.write_json(&mut writer)?;
+            writeln!(writer)?;
+            writer.flush()?;
             Ok(())
         }
     }
