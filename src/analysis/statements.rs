@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::BTreeMap;
 
 use crate::ast::{StatementAst, StatementKind as AstStatementKind};
@@ -234,14 +235,14 @@ fn parser_evidence(
 ) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Parser,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(statement.source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
-            kind: statement_kind_key(statement.kind).to_string(),
-            node_key: Some(format!("statement:{}", span_key(statement.source_span))),
-            field_path: Vec::new(),
+            kind: Sym::from(statement_kind_key(statement.kind).to_string()),
+            key_prefix: Some(Sym::new("statement")),
+            field_path: Box::default(),
         }),
     }]
 }
@@ -564,11 +565,11 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
-            start_row: start,
+            start_byte: start as u32,
+            end_byte: end as u32,
+            start_row: start as u32,
             start_column: 0,
-            end_row: end,
+            end_row: end as u32,
             end_column: 0,
         }
     }

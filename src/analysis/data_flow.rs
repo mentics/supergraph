@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{
@@ -98,9 +99,9 @@ fn emit_callable(
                     data_flow_node_id: node_id,
                     callable_id,
                     role: DataFlowNodeRole::Definition,
-                    name: Some(definition.name.clone()),
-                    text: definition.text.clone(),
-                    semantic_kind: Some(format!("{:?}", definition.kind)),
+                    name: Some(Sym::from(definition.name.clone())),
+                    text: Sym::from(definition.text.clone()),
+                    semantic_kind: Some(Sym::from(format!("{:?}", definition.kind))),
                 }),
             ),
         );
@@ -122,9 +123,9 @@ fn emit_callable(
                     data_flow_node_id: node_id,
                     callable_id,
                     role: DataFlowNodeRole::Use,
-                    name: Some(use_fact.name.clone()),
-                    text: use_fact.name.clone(),
-                    semantic_kind: Some(format!("{:?}", use_fact.kind)),
+                    name: Some(Sym::from(use_fact.name.clone())),
+                    text: Sym::from(use_fact.name.clone()),
+                    semantic_kind: Some(Sym::from(format!("{:?}", use_fact.kind))),
                 }),
             ),
         );
@@ -156,7 +157,7 @@ fn add_defines_edge(
             EdgeFact::Defines(sg::Defines {
                 callable_id: semantic.callable().callable_id,
                 definition_id,
-                name: definition.name.clone(),
+                name: Sym::from(definition.name.clone()),
             }),
         ),
     );
@@ -186,7 +187,7 @@ fn add_uses_edge(
             EdgeFact::Uses(sg::Uses {
                 callable_id: semantic.callable().callable_id,
                 use_id,
-                name: use_fact.name.clone(),
+                name: Sym::from(use_fact.name.clone()),
             }),
         ),
     );
@@ -1248,7 +1249,7 @@ fn insert_merge_value_node(
                 symbol_id: None,
                 expression_id: None,
                 call_site_id: None,
-                name,
+                name: name.map(Sym::from),
                 ordinal: None,
                 state_of_value_id: None,
                 type_hint: None,
@@ -1441,7 +1442,7 @@ fn emit_merge_placeholder_values(
                     symbol_id: None,
                     expression_id: None,
                     call_site_id: None,
-                    name: Some("loop-carried".to_string()),
+                    name: Some(Sym::new("loop-carried")),
                     ordinal: Some(statement.ordinal),
                     state_of_value_id: None,
                     type_hint: None,
@@ -1481,9 +1482,9 @@ fn add_value_data_flow_edge(
             inference_evidence(precision),
             EdgeFact::DataFlow(sg::DataFlow {
                 callable_id: semantic.callable().callable_id,
-                name: name.to_string(),
+                name: Sym::from(name.to_string()),
                 flow_kind,
-                precision: precision.to_string(),
+                precision: Sym::from(precision.to_string()),
             }),
         ),
     );
@@ -1506,7 +1507,7 @@ fn expressions_for_callable(
             index
                 .expression_span(expression.expression_id)
                 .map(|span| span.start_byte)
-                .unwrap_or(usize::MAX),
+                .unwrap_or(usize::MAX as u32),
             expression.ordinal,
             expression.expression_id,
         )
@@ -1567,7 +1568,7 @@ fn expression_value_for_text_in_span(
         .min_by_key(|(node, _)| {
             node.span
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                .unwrap_or(usize::MAX)
+                .unwrap_or(usize::MAX as u32)
         })
         .and_then(|(_, expression)| expression.value_id)
 }
@@ -3410,11 +3411,11 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
-            start_row: start,
+            start_byte: start as u32,
+            end_byte: end as u32,
+            start_row: start as u32,
             start_column: 0,
-            end_row: end,
+            end_row: end as u32,
             end_column: 0,
         }
     }

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     io::{self, Write},
@@ -77,10 +78,10 @@ impl ProgramSupergraphBuilder {
     ) -> Evidence {
         Evidence {
             kind,
-            summary: summary.into(),
+            summary: Sym::from(summary.into()),
             source_id: source_id.into(),
             source_span: source_span.into(),
-            content_hash: content_hash.into(),
+            content_hash: (content_hash.into()).map(Sym::from),
             syntax: syntax.into(),
         }
     }
@@ -1698,7 +1699,7 @@ fn enrich_evidence(
     evidence: &mut [Evidence],
     owner: &SourceOwnership,
     span: Option<SourceSpan>,
-    artifacts: &BTreeMap<NodeId, Option<String>>,
+    artifacts: &BTreeMap<NodeId, Option<Sym>>,
 ) {
     for evidence in evidence {
         if evidence.source_id.is_none() {
@@ -1714,7 +1715,7 @@ fn enrich_evidence(
             continue;
         };
         if evidence.content_hash.is_none() {
-            evidence.content_hash = content_hash.clone();
+            evidence.content_hash = *content_hash;
         }
     }
 }
@@ -1813,14 +1814,14 @@ mod tests {
         let span = span(10, 20);
         let evidence = vec![Evidence {
             kind: EvidenceKind::Parser,
-            summary: "normalized structural fact".to_string(),
+            summary: Sym::new("normalized structural fact"),
             source_id: Some(artifact_id.clone()),
             source_span: Some(span),
-            content_hash: Some("sha256:test-source".to_string()),
+            content_hash: Some(Sym::new("sha256:test-source")),
             syntax: Some(SyntaxReference {
-                kind: "integer".to_string(),
-                node_key: Some("expr:10:20".to_string()),
-                field_path: vec!["value".to_string()],
+                kind: Sym::new("integer"),
+                key_prefix: Some(Sym::new("expr")),
+                field_path: Box::new([Sym::new("value")]),
             }),
         }];
 
@@ -1862,9 +1863,9 @@ mod tests {
                 child_expression_ids: Vec::new(),
                 symbol_id: None,
                 value_id: Some(value_id.clone()),
-                original_text: Some("25".to_string()),
+                original_text: Some(Sym::new("25")),
                 normalized: NormalizedExpression {
-                    canonical: Some("25".to_string()),
+                    canonical: Some(Sym::new("25")),
                     literal: Some(ValueLiteral::Integer("25".to_string())),
                     ..Default::default()
                 },
@@ -1882,7 +1883,7 @@ mod tests {
                 expression_id: Some(expression_id.clone()),
                 kind: ConditionKind::Branch,
                 controlled_statement_ids: vec![statement_id.clone()],
-                outcome_labels: vec!["true".to_string(), "false".to_string()],
+                outcome_labels: vec![Sym::new("true"), Sym::from("false".to_string())],
                 regions: Vec::new(),
                 continuation: None,
                 fallthrough: FallthroughBehavior::Unknown,
@@ -1896,7 +1897,7 @@ mod tests {
             Symbol {
                 symbol_id: symbol_id.clone(),
                 scope_id: scope_id.clone(),
-                name: "batch_size".to_string(),
+                name: Sym::new("batch_size"),
                 kind: SymbolKind::Local,
                 binding_id: None,
                 resolution: Resolution::Exact,
@@ -1913,7 +1914,7 @@ mod tests {
                 symbol_id: Some(symbol_id.clone()),
                 value_id: Some(value_id.clone()),
                 kind: DefinitionKind::Assignment,
-                name: Some("batch_size".to_string()),
+                name: Some(Sym::new("batch_size")),
             },
             owner.clone(),
             Some(span),
@@ -1927,7 +1928,7 @@ mod tests {
                 symbol_id: Some(symbol_id.clone()),
                 value_id: Some(value_id.clone()),
                 kind: UseKind::Read,
-                name: Some("batch_size".to_string()),
+                name: Some(Sym::new("batch_size")),
             },
             owner.clone(),
             Some(span),
@@ -1946,7 +1947,7 @@ mod tests {
                 name: None,
                 ordinal: None,
                 state_of_value_id: None,
-                type_hint: Some("int".to_string()),
+                type_hint: Some(Sym::new("int")),
                 literal: Some(ValueLiteral::Integer("25".to_string())),
             },
             owner.clone(),
@@ -2070,9 +2071,9 @@ mod tests {
         builder.add_artifact(
             Artifact {
                 artifact_id: artifact_id.clone(),
-                path: "src/main.py".to_string(),
-                module_path: "main".to_string(),
-                content_hash: Some("sha256:source-v1".to_string()),
+                path: Sym::new("src/main.py"),
+                module_path: Sym::new("main"),
+                content_hash: Some(Sym::new("sha256:source-v1")),
             },
             Vec::new(),
         );
@@ -2090,7 +2091,7 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: vec![Evidence {
                 kind: EvidenceKind::Inference,
-                summary: "derived diagnostic".to_string(),
+                summary: Sym::new("derived diagnostic"),
                 source_id: None,
                 source_span: None,
                 content_hash: None,
@@ -2249,9 +2250,9 @@ mod tests {
         builder.add_artifact(
             Artifact {
                 artifact_id: artifact_id.clone(),
-                path: "main.py".to_string(),
-                module_path: "main".to_string(),
-                content_hash: Some("sha256:sg013".to_string()),
+                path: Sym::new("main.py"),
+                module_path: Sym::new("main"),
+                content_hash: Some(Sym::new("sha256:sg013")),
             },
             Vec::new(),
         );
@@ -2275,7 +2276,7 @@ mod tests {
             Symbol {
                 symbol_id: test_id("symbol:ambiguous"),
                 scope_id: scope_id.clone(),
-                name: "handler".to_string(),
+                name: Sym::new("handler"),
                 kind: SymbolKind::Local,
                 binding_id: None,
                 resolution: Resolution::Ambiguous,
@@ -2288,14 +2289,14 @@ mod tests {
         builder.add_external_target(
             ExternalTarget {
                 external_target_id: test_id("external:service"),
-                ecosystem: "python".to_string(),
-                package_name: Some("service".to_string()),
+                ecosystem: Sym::new("python"),
+                package_name: Some(Sym::new("service")),
                 package_version: None,
-                module_path: Some("service".to_string()),
-                qualified_name: "service.call".to_string(),
+                module_path: Some(Sym::new("service")),
+                qualified_name: Sym::new("service.call"),
                 member_path: None,
                 target_kind: ExternalTargetKind::Function,
-                source: "imported package".to_string(),
+                source: Sym::new("imported package"),
             },
             Confidence::Exact,
             test_evidence("external target"),
@@ -2305,7 +2306,7 @@ mod tests {
                 caller_callable_id: caller_id.clone(),
                 callee_callable_id: None,
                 external_target_id: None,
-                unresolved_target: Some("unknown_target".to_string()),
+                unresolved_target: Some(Sym::new("unknown_target")),
                 call_site_id: call_site_id.clone(),
                 kind: CallEdgeKind::PossibleDynamic,
                 resolution: Resolution::Unresolved,
@@ -2337,9 +2338,9 @@ mod tests {
                 call_site_id: call_site_id.clone(),
                 caller_callable_id: caller_id.clone(),
                 callee_callable_id: test_id("callable:maybe"),
-                parameter_name: "receiver".to_string(),
+                parameter_name: Sym::new("receiver"),
                 ordinal: 0,
-                precision: "sg083-parameter-out-possible-alias-mutation-summary".to_string(),
+                precision: Sym::new("sg083-parameter-out-possible-alias-mutation-summary"),
             },
             owner.clone(),
             Some(span),
@@ -2740,12 +2741,12 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
+            start_byte: start as u32,
+            end_byte: end as u32,
             start_row: 1,
-            start_column: start,
+            start_column: start as u32,
             end_row: 1,
-            end_column: end,
+            end_column: end as u32,
         }
     }
 
@@ -2848,9 +2849,9 @@ mod tests {
             schema_evidence(artifact, "artifact source", None),
             NodeFact::Artifact(Artifact {
                 artifact_id: artifact.clone(),
-                path: "sg120.py".to_string(),
-                module_path: "sg120".to_string(),
-                content_hash: Some("sha256:sg120".to_string()),
+                path: Sym::new("sg120.py"),
+                module_path: Sym::new("sg120"),
+                content_hash: Some(Sym::new("sha256:sg120")),
             }),
         ));
         builder.insert_node(schema_node(
@@ -2866,7 +2867,7 @@ mod tests {
                 artifact_id: artifact.clone(),
                 kind: ScopeKind::Module,
                 variant: ScopeVariant::FileModule,
-                language_variant: Some("python:module".to_string()),
+                language_variant: Some(Sym::new("python:module")),
                 binding_behavior: ScopeBindingBehavior::Boundary,
                 owner_callable_id: None,
                 span: None,
@@ -2882,7 +2883,7 @@ mod tests {
             NodeFact::Binding(Binding {
                 binding_id: binding.clone(),
                 scope_id: scope.clone(),
-                name: "handler".to_string(),
+                name: Sym::new("handler"),
                 kind: BindingKind::Function,
                 target: BindingTarget::Callable(callable.clone()),
                 span,
@@ -2898,19 +2899,19 @@ mod tests {
             NodeFact::Callable(Callable {
                 callable_id: callable.clone(),
                 kind: CallableKind::Function,
-                name: Some("handler".to_string()),
-                qualified_name: "sg120.handler".to_string(),
+                name: Some(Sym::new("handler")),
+                qualified_name: Sym::new("sg120.handler"),
                 artifact_id: artifact.clone(),
                 declaration_span: span,
                 body_span: Some(span),
                 signature: Signature {
-                    parameters: vec!["items".to_string()],
-                    return_annotation: Some("int".to_string()),
+                    parameters: vec![Sym::new("items")],
+                    return_annotation: Some(Sym::new("int")),
                 },
                 scope_id: scope.clone(),
-                attributes: vec!["entrypoint".to_string()],
+                attributes: vec![Sym::new("entrypoint")],
                 incoming_local_call_count: 0,
-                external_invocation_metadata: vec!["route".to_string()],
+                external_invocation_metadata: vec![Sym::new("route")],
             }),
         ));
         builder.insert_node(schema_node(
@@ -2925,7 +2926,7 @@ mod tests {
                 artifact_id: artifact.clone(),
                 enclosing_callable_id: callable.clone(),
                 span,
-                callee_expression: "emit".to_string(),
+                callee_expression: Sym::new("emit"),
                 argument_shape: ArgumentShape {
                     positional_count: 1,
                     named_arguments: Vec::new(),
@@ -2943,14 +2944,14 @@ mod tests {
             schema_evidence(artifact, "external target", Some(span)),
             NodeFact::ExternalTarget(ExternalTarget {
                 external_target_id: external.clone(),
-                ecosystem: "python".to_string(),
-                package_name: Some("service".to_string()),
+                ecosystem: Sym::new("python"),
+                package_name: Some(Sym::new("service")),
                 package_version: None,
-                module_path: Some("service".to_string()),
-                qualified_name: "service.emit".to_string(),
+                module_path: Some(Sym::new("service")),
+                qualified_name: Sym::new("service.emit"),
                 member_path: None,
                 target_kind: ExternalTargetKind::Function,
-                source: "import".to_string(),
+                source: Sym::new("import"),
             }),
         ));
         builder.insert_node(schema_node(
@@ -2988,9 +2989,9 @@ mod tests {
                 child_expression_ids: Vec::new(),
                 symbol_id: Some(symbol.clone()),
                 value_id: Some(value_source.clone()),
-                original_text: Some("25".to_string()),
+                original_text: Some(Sym::new("25")),
                 normalized: NormalizedExpression {
-                    canonical: Some("25".to_string()),
+                    canonical: Some(Sym::new("25")),
                     literal: Some(ValueLiteral::Integer("25".to_string())),
                     ..Default::default()
                 },
@@ -3010,7 +3011,7 @@ mod tests {
                 expression_id: Some(expression.clone()),
                 kind: ConditionKind::Guard,
                 controlled_statement_ids: vec![statement.clone()],
-                outcome_labels: vec!["true".to_string()],
+                outcome_labels: vec![Sym::new("true")],
                 regions: Vec::new(),
                 continuation: None,
                 fallthrough: FallthroughBehavior::Conditional,
@@ -3026,7 +3027,7 @@ mod tests {
             NodeFact::Symbol(Symbol {
                 symbol_id: symbol.clone(),
                 scope_id: scope.clone(),
-                name: "batch_size".to_string(),
+                name: Sym::new("batch_size"),
                 kind: SymbolKind::Local,
                 binding_id: Some(binding.clone()),
                 resolution: Resolution::Exact,
@@ -3045,7 +3046,7 @@ mod tests {
                 symbol_id: Some(symbol.clone()),
                 value_id: Some(value_source.clone()),
                 kind: DefinitionKind::Assignment,
-                name: Some("batch_size".to_string()),
+                name: Some(Sym::new("batch_size")),
             }),
         ));
         builder.insert_node(schema_node(
@@ -3061,7 +3062,7 @@ mod tests {
                 symbol_id: Some(symbol.clone()),
                 value_id: Some(value_source.clone()),
                 kind: UseKind::Read,
-                name: Some("batch_size".to_string()),
+                name: Some(Sym::new("batch_size")),
             }),
         ));
         for (id, kind, role, symbol_id, expression_id, call_site_id, name, ordinal, state_of) in [
@@ -3158,10 +3159,10 @@ mod tests {
                     symbol_id,
                     expression_id,
                     call_site_id,
-                    name,
+                    name: name.map(Sym::from),
                     ordinal,
                     state_of_value_id: state_of,
-                    type_hint: Some("int".to_string()),
+                    type_hint: Some(Sym::new("int")),
                     literal: None,
                 }),
             ));
@@ -3214,8 +3215,8 @@ mod tests {
                     cfg_node_id: id,
                     callable_id: callable.clone(),
                     role,
-                    label: label.to_string(),
-                    semantic_kind: Some("sg120".to_string()),
+                    label: Sym::from(label.to_string()),
+                    semantic_kind: Some(Sym::new("sg120")),
                 }),
             ));
         }
@@ -3230,9 +3231,9 @@ mod tests {
                 data_flow_node_id: data_flow_node.clone(),
                 callable_id: callable.clone(),
                 role: DataFlowNodeRole::Use,
-                name: Some("batch_size".to_string()),
-                text: "batch_size".to_string(),
-                semantic_kind: Some("legacy-use".to_string()),
+                name: Some(Sym::new("batch_size")),
+                text: Sym::new("batch_size"),
+                semantic_kind: Some(Sym::new("legacy-use")),
             }),
         ));
         for (id, kind, title) in [
@@ -3262,9 +3263,9 @@ mod tests {
                 NodeFact::Requirement(Requirement {
                     requirement_id: id,
                     kind,
-                    title: title.to_string(),
-                    summary: "Schema completeness fixture requirement.".to_string(),
-                    source_rule: "sg120-schema-completeness".to_string(),
+                    title: Sym::from(title.to_string()),
+                    summary: Sym::new("Schema completeness fixture requirement."),
+                    source_rule: Sym::new("sg120-schema-completeness"),
                     path_conditions: Vec::new(),
                 }),
             ));
@@ -3349,7 +3350,7 @@ mod tests {
                 flow_kind: ControlFlowKind::Exit,
                 outcome: super::super::schema::ControlFlowOutcome::Exit,
                 branch_arm: None,
-                precision: "sg120-exact-cfg".to_string(),
+                precision: Sym::new("sg120-exact-cfg"),
             },
             owner.clone(),
             Some(span),
@@ -3361,7 +3362,7 @@ mod tests {
                 callable_id: callable.clone(),
                 condition_id: condition.clone(),
                 controlled_id: statement.clone(),
-                precision: "sg120-exact-control".to_string(),
+                precision: Sym::new("sg120-exact-control"),
             },
             owner.clone(),
             Some(span),
@@ -3374,7 +3375,7 @@ mod tests {
             Defines {
                 callable_id: callable.clone(),
                 definition_id: definition.clone(),
-                name: "batch_size".to_string(),
+                name: Sym::new("batch_size"),
             },
             owner.clone(),
             Some(span),
@@ -3387,7 +3388,7 @@ mod tests {
             Uses {
                 callable_id: callable.clone(),
                 use_id: use_node.clone(),
-                name: "batch_size".to_string(),
+                name: Sym::new("batch_size"),
             },
             owner.clone(),
             Some(span),
@@ -3399,9 +3400,9 @@ mod tests {
             value_call_result.clone(),
             DataFlow {
                 callable_id: callable.clone(),
-                name: "batch_size".to_string(),
+                name: Sym::new("batch_size"),
                 flow_kind: DataFlowKind::AssignmentValue,
-                precision: "sg120-exact-data-flow".to_string(),
+                precision: Sym::new("sg120-exact-data-flow"),
             },
             owner.clone(),
             Some(span),
@@ -3415,9 +3416,9 @@ mod tests {
                 call_site_id: call_site.clone(),
                 caller_callable_id: callable.clone(),
                 callee_callable_id: callable.clone(),
-                parameter_name: "items".to_string(),
+                parameter_name: Sym::new("items"),
                 ordinal: 0,
-                precision: "sg120-exact-parameter-in".to_string(),
+                precision: Sym::new("sg120-exact-parameter-in"),
             },
             owner.clone(),
             Some(span),
@@ -3431,7 +3432,7 @@ mod tests {
                 call_site_id: call_site.clone(),
                 caller_callable_id: callable.clone(),
                 callee_callable_id: callable.clone(),
-                precision: "sg120-exact-returns-to".to_string(),
+                precision: Sym::new("sg120-exact-returns-to"),
             },
             owner.clone(),
             Some(span),
@@ -3445,9 +3446,9 @@ mod tests {
                 call_site_id: call_site.clone(),
                 caller_callable_id: callable.clone(),
                 callee_callable_id: callable.clone(),
-                parameter_name: "items".to_string(),
+                parameter_name: Sym::new("items"),
                 ordinal: 0,
-                precision: "sg120-possible-alias-parameter-out".to_string(),
+                precision: Sym::new("sg120-possible-alias-parameter-out"),
             },
             owner.clone(),
             Some(span),
@@ -3462,9 +3463,9 @@ mod tests {
                 caller_callable_id: callable.clone(),
                 callee_callable_id: callable.clone(),
                 target_kind: ThrowsToTargetKind::CallerExceptionalExit,
-                exception_value: Some("ValueError()".to_string()),
-                exception_type: Some("ValueError".to_string()),
-                precision: "sg120-exact-throws-to".to_string(),
+                exception_value: Some(Sym::new("ValueError()")),
+                exception_type: Some(Sym::new("ValueError")),
+                precision: Sym::new("sg120-exact-throws-to"),
             },
             owner.clone(),
             Some(span),
@@ -3495,7 +3496,7 @@ mod tests {
             Orders {
                 predecessor_requirement_id: requirement.clone(),
                 successor_requirement_id: child_requirement.clone(),
-                order_key: "0001".to_string(),
+                order_key: Sym::new("0001"),
             },
             artifact_owner.clone(),
             None,
@@ -3506,7 +3507,7 @@ mod tests {
             TracesTo {
                 requirement_id: requirement.clone(),
                 code_fact_id: statement.clone(),
-                precision: "sg120-exact-trace".to_string(),
+                precision: Sym::new("sg120-exact-trace"),
             },
             artifact_owner.clone(),
             None,
@@ -3517,7 +3518,7 @@ mod tests {
             DependsOnDomainKnowledge {
                 requirement_id: requirement.clone(),
                 domain_knowledge_id: domain.clone(),
-                precision: "sg120-stale-domain-knowledge".to_string(),
+                precision: Sym::new("sg120-stale-domain-knowledge"),
             },
             artifact_owner.clone(),
             None,
@@ -3609,14 +3610,14 @@ mod tests {
     ) -> Vec<Evidence> {
         vec![Evidence {
             kind: EvidenceKind::Parser,
-            summary: summary.to_string(),
+            summary: Sym::from(summary.to_string()),
             source_id: Some(artifact_id),
             source_span,
-            content_hash: Some("sha256:sg120".to_string()),
+            content_hash: Some(Sym::new("sha256:sg120")),
             syntax: Some(SyntaxReference {
-                kind: "sg120-fixture".to_string(),
-                node_key: Some(summary.to_string()),
-                field_path: vec!["schema".to_string()],
+                kind: Sym::new("sg120-fixture"),
+                key_prefix: Some(Sym::from(summary)),
+                field_path: Box::new([Sym::new("schema")]),
             }),
         }]
     }
@@ -3681,8 +3682,8 @@ mod tests {
         builder.add_artifact(
             Artifact {
                 artifact_id: artifact_id.clone(),
-                path: "main.py".to_string(),
-                module_path: "main".to_string(),
+                path: Sym::new("main.py"),
+                module_path: Sym::new("main"),
                 content_hash: None,
             },
             Vec::new(),
@@ -3694,7 +3695,7 @@ mod tests {
                 artifact_id: artifact_id.clone(),
                 kind: ScopeKind::Module,
                 variant: ScopeVariant::FileModule,
-                language_variant: Some("python:module".to_string()),
+                language_variant: Some(Sym::new("python:module")),
                 binding_behavior: ScopeBindingBehavior::Boundary,
                 owner_callable_id: None,
                 span: None,
@@ -3714,8 +3715,8 @@ mod tests {
                 Callable {
                     callable_id,
                     kind: CallableKind::Function,
-                    name: qualified_name.rsplit('.').next().map(str::to_string),
-                    qualified_name: qualified_name.to_string(),
+                    name: (qualified_name.rsplit('.').next().map(str::to_string)).map(Sym::from),
+                    qualified_name: Sym::from(qualified_name.to_string()),
                     artifact_id: artifact_id.clone(),
                     declaration_span,
                     body_span,
@@ -3738,7 +3739,7 @@ mod tests {
                 artifact_id: artifact_id.clone(),
                 enclosing_callable_id: caller_id.clone(),
                 span: span(100, 114),
-                callee_expression: "calculate_risk".to_string(),
+                callee_expression: Sym::new("calculate_risk"),
                 argument_shape: ArgumentShape {
                     positional_count: 0,
                     named_arguments: Vec::new(),
@@ -3783,10 +3784,10 @@ mod tests {
             fact: NodeFact::Requirement(Requirement {
                 requirement_id: requirement_id.clone(),
                 kind: RequirementKind::Callable,
-                title: "Calculate risk behavior".to_string(),
-                summary: "Calculate risk behavior is traceable to the callable subject."
-                    .to_string(),
-                source_rule: "test".to_string(),
+                title: Sym::new("Calculate risk behavior"),
+                summary: Sym::from("Calculate risk behavior is traceable to the callable subject."
+                    .to_string()),
+                source_rule: Sym::new("test"),
                 path_conditions: Vec::new(),
             }),
         });
@@ -3805,7 +3806,7 @@ mod tests {
             fact: EdgeFact::TracesTo(TracesTo {
                 requirement_id,
                 code_fact_id: callee_id,
-                precision: "subject-reference".to_string(),
+                precision: Sym::new("subject-reference"),
             }),
         });
 
@@ -3860,7 +3861,7 @@ mod tests {
     fn test_evidence(summary: &str) -> Vec<Evidence> {
         vec![Evidence {
             kind: EvidenceKind::Inference,
-            summary: summary.to_string(),
+            summary: Sym::from(summary.to_string()),
             source_id: None,
             source_span: None,
             content_hash: None,

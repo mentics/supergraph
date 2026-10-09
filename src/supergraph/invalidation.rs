@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
@@ -274,12 +275,12 @@ fn add_owned_subjects(
 
 fn artifact_hash_changed(graph: &ProgramSupergraph, change: &ArtifactHashChange) -> bool {
     match artifact_content_hash(graph, change.artifact_id) {
-        Some(existing_hash) => existing_hash != change.new_content_hash,
+        Some(existing_hash) => existing_hash.map(|hash| hash.to_string()) != change.new_content_hash,
         None => change.new_content_hash.is_some(),
     }
 }
 
-fn artifact_content_hash(graph: &ProgramSupergraph, artifact_id: NodeId) -> Option<Option<String>> {
+fn artifact_content_hash(graph: &ProgramSupergraph, artifact_id: NodeId) -> Option<Option<Sym>> {
     node_by_id(graph, artifact_id).and_then(|node| match &node.fact {
         NodeFact::Artifact(artifact) => Some(artifact.content_hash.clone()),
         _ => None,

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{CallAst, DefinitionKind as AstDefinitionKind, RaiseAst, ReturnAst, SourceSpan};
@@ -158,7 +159,7 @@ fn emit_return_values(graph: &mut ProgramSupergraph, index: &CallableIndex, sema
                 ),
                 None,
                 None,
-                semantic.callable().signature.return_annotation.clone(),
+                (semantic.callable().signature.return_annotation.clone()).map(|sym| sym.to_string()),
                 None,
                 "return value lowered to value",
             ),
@@ -525,7 +526,7 @@ fn apply_definition_value_ids(graph: &mut ProgramSupergraph, index: &CallableInd
         .filter(|definition| definition.owner_id == semantic.owner_id())
     {
         let value_id = if definition.kind == AstDefinitionKind::Parameter {
-            parameter_values.get(&definition.name).cloned()
+            parameter_values.get(definition.name.as_str()).cloned()
         } else {
             expression_values_by_span
                 .iter()
@@ -638,10 +639,10 @@ fn value_node(
             symbol_id: None,
             expression_id,
             call_site_id,
-            name,
+            name: name.map(Sym::from),
             ordinal,
             state_of_value_id,
-            type_hint,
+            type_hint: type_hint.map(Sym::from),
             literal,
         }),
     )
@@ -695,12 +696,12 @@ fn expression_value_shape(expression: &sg::Expression) -> (ValueKind, Confidence
 }
 
 fn expression_value_name(expression: &sg::Expression) -> Option<String> {
-    expression
+    (expression
         .normalized
         .identifier
         .clone()
         .or_else(|| expression.normalized.member.clone())
-        .or_else(|| expression.original_text.clone())
+        .or_else(|| expression.original_text.clone())).map(|sym| sym.to_string())
 }
 
 fn expression_kind_key(kind: ExpressionKind) -> &'static str {
@@ -866,7 +867,7 @@ fn expression_id_for_text_in_span(
         .min_by_key(|(node, _)| {
             node.span
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                .unwrap_or(usize::MAX)
+                .unwrap_or(usize::MAX as u32)
         })
         .map(|(_, expression)| expression.expression_id.clone())
 }
@@ -1476,13 +1477,13 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start_row: start_byte,
+            start_row: start_byte as u32,
             start_column: 0,
-            end_row: end_byte,
+            end_row: end_byte as u32,
             end_column: 0,
         }
     }

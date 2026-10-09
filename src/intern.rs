@@ -46,11 +46,11 @@ fn shard_of(text: &str) -> usize {
 
 /// An interned string. Equality and hashing use the index; ordering uses the text.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Sym(u32);
+pub struct Sym(std::num::NonZeroU32);
 
 impl Sym {
     /// The empty string.
-    pub const EMPTY: Sym = Sym(0);
+    pub const EMPTY: Sym = Sym(std::num::NonZeroU32::MIN);
 
     pub fn new(text: &str) -> Sym {
         if text.is_empty() {
@@ -59,11 +59,11 @@ impl Sym {
         let interner = interner();
         let shard = &interner.shards[shard_of(text)];
         if let Some(index) = shard.read().expect("interner shard").lookup.get(text) {
-            return Sym(*index);
+            return Sym::from_index(*index);
         }
         let mut guard = shard.write().expect("interner shard");
         if let Some(index) = guard.lookup.get(text) {
-            return Sym(*index);
+            return Sym::from_index(*index);
         }
         let leaked: &'static str = Box::leak(text.to_owned().into_boxed_str());
         let index = {
@@ -72,15 +72,20 @@ impl Sym {
             u32::try_from(strings.len() - 1).expect("interner exceeded u32::MAX strings")
         };
         guard.lookup.insert(leaked, index);
-        Sym(index)
+        Sym::from_index(index)
+    }
+
+    fn from_index(index: u32) -> Sym {
+        Sym(std::num::NonZeroU32::new(index + 1).expect("interner index overflow"))
     }
 
     pub fn as_str(self) -> &'static str {
-        interner().strings.read().expect("interner table")[self.0 as usize]
+        interner().strings.read().expect("interner table")[self.index() as usize]
     }
 
+    /// Dense index of this string in the interner table (the empty string is 0).
     pub fn index(self) -> u32 {
-        self.0
+        self.0.get() - 1
     }
 
     pub fn is_empty(self) -> bool {
@@ -107,7 +112,7 @@ impl PartialOrd for Sym {
 
 impl Ord for Sym {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.0 == other.0 {
+        if self == other {
             return std::cmp::Ordering::Equal;
         }
         self.as_str().cmp(other.as_str())
@@ -147,6 +152,38 @@ impl From<String> for Sym {
 impl From<Sym> for String {
     fn from(sym: Sym) -> Self {
         sym.as_str().to_owned()
+    }
+}
+
+impl std::ops::Deref for Sym {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq<String> for Sym {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<Sym> for str {
+    fn eq(&self, other: &Sym) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<Sym> for &str {
+    fn eq(&self, other: &Sym) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<Sym> for String {
+    fn eq(&self, other: &Sym) -> bool {
+        self.as_str() == other.as_str()
     }
 }
 
@@ -201,6 +238,7 @@ mod tests {
         assert_eq!(Sym::new(""), Sym::EMPTY);
         assert_eq!(Sym::EMPTY.as_str(), "");
         assert_eq!(std::mem::size_of::<Sym>(), 4);
+        assert_eq!(std::mem::size_of::<Option<Sym>>(), 4);
     }
 
     #[test]

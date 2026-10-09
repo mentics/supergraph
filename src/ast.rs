@@ -270,10 +270,10 @@ pub struct IndexAccessAst {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SourceSpan {
-    pub start_byte: usize,
-    pub end_byte: usize,
-    pub start_row: usize,
-    pub start_column: usize,
-    pub end_row: usize,
-    pub end_column: usize,
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub start_row: u32,
+    pub start_column: u32,
+    pub end_row: u32,
+    pub end_column: u32,
 }

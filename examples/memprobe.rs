@@ -44,7 +44,7 @@ fn mb(bytes: usize) -> f64 {
 fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1).expect("path argument");
     let before = LIVE.load(Relaxed);
-    let graph = supergraph::analyze_rust_supergraph(std::path::Path::new(&path))?;
+    let mut graph = supergraph::analyze_rust_supergraph(std::path::Path::new(&path))?;
     let retained = LIVE.load(Relaxed) - before;
     println!("peak     {:>10.1} MB", mb(PEAK.load(Relaxed)));
     println!("retained {:>10.1} MB", mb(retained));
@@ -54,6 +54,19 @@ fn main() -> anyhow::Result<()> {
         std::mem::size_of::<supergraph::supergraph::GraphNode>(),
         std::mem::size_of::<supergraph::supergraph::GraphEdge>(),
         std::mem::size_of::<supergraph::supergraph::Evidence>(),
+    );
+    let live = LIVE.load(Relaxed);
+    let indexes = std::mem::take(&mut graph.indexes);
+    drop(indexes);
+    println!("indexes  {:>10.1} MB", mb(live - LIVE.load(Relaxed)));
+    let live = LIVE.load(Relaxed);
+    graph.drop_id_cache();
+    println!("id_cache {:>10.1} MB", mb(live - LIVE.load(Relaxed)));
+    println!(
+        "nodes vec {:.1} MB, edges vec {:.1} MB (inline), interned strings {}",
+        mb(graph.nodes.capacity() * std::mem::size_of::<supergraph::supergraph::GraphNode>()),
+        mb(graph.edges.capacity() * std::mem::size_of::<supergraph::supergraph::GraphEdge>()),
+        supergraph::intern::Sym::count(),
     );
     let mut by_kind: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     for node in &graph.nodes {

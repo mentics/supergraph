@@ -132,6 +132,18 @@ impl<'a> From<&&'a str> for IdPart<'a> {
     }
 }
 
+impl From<crate::intern::Sym> for IdPart<'_> {
+    fn from(value: crate::intern::Sym) -> Self {
+        IdPart::Str(value.as_str())
+    }
+}
+
+impl From<&crate::intern::Sym> for IdPart<'_> {
+    fn from(value: &crate::intern::Sym) -> Self {
+        IdPart::Str(value.as_str())
+    }
+}
+
 impl From<NodeId> for IdPart<'_> {
     fn from(value: NodeId) -> Self {
         IdPart::Id(value)

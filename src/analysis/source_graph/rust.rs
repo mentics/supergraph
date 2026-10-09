@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::BTreeSet;
 
 use crate::analysis::enrich_supergraph_with_semantic_flows;
@@ -42,7 +43,7 @@ impl RustSupergraphAdapter {
                 evidence: vec![format!("import binding: {expression}")],
             },
             // Tuple structs are constructed with call syntax: `Wrapper(1)`.
-            BindingTarget::Class(class_name) => match context.classes.get(class_name) {
+            BindingTarget::Class(class_name) => match context.classes.get(class_name.as_str()) {
                 Some(class) => ResolvedCall::LocalTarget {
                     callee: class
                         .explicit_constructor_id
@@ -92,7 +93,7 @@ impl RustSupergraphAdapter {
             if let Some(class_name) = &pending.class_qualified_name {
                 if let Some(callee) = context
                     .classes
-                    .get(class_name)
+                    .get(class_name.as_str())
                     .and_then(|class| class.methods.get(member))
                 {
                     return ResolvedCall::LocalTarget {
@@ -145,7 +146,7 @@ impl RustSupergraphAdapter {
             if let Some(class_name) = &pending.class_qualified_name {
                 if let Some(callee) = context
                     .classes
-                    .get(class_name)
+                    .get(class_name.as_str())
                     .and_then(|class| class.methods.get(member))
                 {
                     return ResolvedCall::LocalTarget {
@@ -177,7 +178,7 @@ impl RustSupergraphAdapter {
                     BindingTarget::Class(class_name) => {
                         if let Some(callee) = context
                             .classes
-                            .get(class_name)
+                            .get(class_name.as_str())
                             .and_then(|class| class.methods.get(member))
                         {
                             return ResolvedCall::LocalTarget {
@@ -516,18 +517,18 @@ fn external_target(
                 &format!("{target_kind:?}"),
             ],
         ),
-        ecosystem: package_name
+        ecosystem: Sym::from(package_name
             .as_deref()
             .map(ecosystem_for_package)
             .unwrap_or("unknown")
-            .to_string(),
-        package_name,
+            .to_string()),
+        package_name: package_name.map(Sym::from),
         package_version: None,
-        module_path,
-        qualified_name: qualified_name.to_string(),
-        member_path: member_path.map(str::to_string),
+        module_path: module_path.map(Sym::from),
+        qualified_name: Sym::from(qualified_name.to_string()),
+        member_path: (member_path.map(str::to_string)).map(Sym::from),
         target_kind,
-        source: source.to_string(),
+        source: Sym::from(source.to_string()),
     }
 }
 

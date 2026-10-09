@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::HashMap;
 
 use crate::ast::{ConditionAst, ConditionKind as AstConditionKind, SourceSpan};
@@ -142,7 +143,7 @@ fn emit_condition_region(
                 expression_id,
                 kind,
                 controlled_statement_ids,
-                outcome_labels,
+                outcome_labels: outcome_labels.into_iter().map(Sym::from).collect(),
                 regions,
                 continuation,
                 fallthrough,
@@ -200,10 +201,10 @@ fn emit_exception_region(
                 },
                 controlled_statement_ids,
                 outcome_labels: vec![
-                    "try".to_string(),
-                    "exception".to_string(),
-                    "finally".to_string(),
-                    "normal-continuation".to_string(),
+                    Sym::new("try"),
+                    Sym::new("exception"),
+                    Sym::new("finally"),
+                    Sym::new("normal-continuation"),
                 ],
                 regions,
                 continuation: continuation_for_exception(statement, statements),
@@ -292,7 +293,7 @@ fn control_effects_for_statement(
         kind,
         target_statement_id: next_statement_id,
         fallthrough,
-        description: description.to_string(),
+        description: Sym::from(description.to_string()),
     }]
 }
 
@@ -407,7 +408,7 @@ fn expression_id_for_condition(
         .min_by_key(|(node, _)| {
             node.span
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                .unwrap_or(usize::MAX)
+                .unwrap_or(usize::MAX as u32)
         })
         .map(|(_, expression)| expression.expression_id)
 }
@@ -415,7 +416,7 @@ fn expression_id_for_condition(
 fn branch_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Vec<ControlRegion> {
     let else_offset = marker_offset(
         &statement.text,
-        statement.span.start_byte,
+        statement.span.start_byte as usize,
         &["else", "elif"],
     );
     let descendants = descendants(statement, statements)
@@ -424,12 +425,12 @@ fn branch_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Ve
         .collect::<Vec<_>>();
     let branch_ids = descendants
         .iter()
-        .filter(|child| else_offset.is_none_or(|offset| child.span.start_byte < offset))
+        .filter(|child| else_offset.is_none_or(|offset| child.span.start_byte < offset as u32))
         .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let else_ids = descendants
         .iter()
-        .filter(|child| else_offset.is_some_and(|offset| child.span.start_byte >= offset))
+        .filter(|child| else_offset.is_some_and(|offset| child.span.start_byte >= offset as u32))
         .map(|child| child.statement_id)
         .collect::<Vec<_>>();
 
@@ -478,10 +479,10 @@ fn exception_regions(
 ) -> Vec<ControlRegion> {
     let catch_offset = marker_offset(
         &statement.text,
-        statement.span.start_byte,
+        statement.span.start_byte as usize,
         &["except", "catch"],
     );
-    let finally_offset = marker_offset(&statement.text, statement.span.start_byte, &["finally"]);
+    let finally_offset = marker_offset(&statement.text, statement.span.start_byte as usize, &["finally"]);
     let descendants = descendants(statement, statements)
         .into_iter()
         .filter(|child| child.statement_id != statement.statement_id)
@@ -490,22 +491,22 @@ fn exception_regions(
     let try_ids = descendants
         .iter()
         .filter(|child| {
-            catch_offset.is_none_or(|offset| child.span.start_byte < offset)
-                && finally_offset.is_none_or(|offset| child.span.start_byte < offset)
+            catch_offset.is_none_or(|offset| child.span.start_byte < offset as u32)
+                && finally_offset.is_none_or(|offset| child.span.start_byte < offset as u32)
         })
         .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let catch_ids = descendants
         .iter()
         .filter(|child| {
-            catch_offset.is_some_and(|offset| child.span.start_byte >= offset)
-                && finally_offset.is_none_or(|offset| child.span.start_byte < offset)
+            catch_offset.is_some_and(|offset| child.span.start_byte >= offset as u32)
+                && finally_offset.is_none_or(|offset| child.span.start_byte < offset as u32)
         })
         .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let finally_ids = descendants
         .iter()
-        .filter(|child| finally_offset.is_some_and(|offset| child.span.start_byte >= offset))
+        .filter(|child| finally_offset.is_some_and(|offset| child.span.start_byte >= offset as u32))
         .map(|child| child.statement_id)
         .collect::<Vec<_>>();
 
@@ -542,7 +543,7 @@ fn region(
 ) -> ControlRegion {
     ControlRegion {
         kind,
-        label: label.to_string(),
+        label: Sym::from(label.to_string()),
         entry_statement_id: statement_ids.first().cloned(),
         exit_statement_id: statement_ids.last().cloned(),
         statement_ids,
@@ -585,7 +586,7 @@ fn continuation_for_controller(
     Some(ContinuationPoint {
         kind: continuation_kind,
         target_statement_id: target,
-        description: description.to_string(),
+        description: Sym::from(description.to_string()),
     })
 }
 
@@ -605,8 +606,8 @@ fn continuation_for_exception(
             ContinuationKind::ExceptionHandler
         },
         target_statement_id: finally_entry.or_else(|| next_statement_id(statement, statements)),
-        description: "exception region continues through matching handlers and finally paths"
-            .to_string(),
+        description: Sym::from("exception region continues through matching handlers and finally paths"
+            .to_string()),
     })
 }
 
@@ -672,22 +673,22 @@ fn parser_evidence(
 ) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Parser,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
-            kind: syntax_kind.to_string(),
-            node_key: Some(format!("structured:{}", span_key(source_span))),
-            field_path: Vec::new(),
+            kind: Sym::from(syntax_kind.to_string()),
+            key_prefix: Some(Sym::new("structured")),
+            field_path: Box::default(),
         }),
     }]
 }
 
 fn statement_sort_key(statement: &StatementInfo) -> (usize, usize, StatementKind, usize, NodeId) {
     (
-        statement.span.start_byte,
-        statement.span.end_byte,
+        statement.span.start_byte as usize,
+        statement.span.end_byte as usize,
         statement.kind,
         statement.ordinal,
         statement.statement_id,
@@ -707,6 +708,7 @@ struct StatementInfo {
 #[cfg(test)]
 mod tests {
     use crate::supergraph::ids::NodeId;
+    use crate::intern::Sym;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, ConditionAst, ConditionKind as AstConditionKind, ExpressionAst,
@@ -784,12 +786,12 @@ mod tests {
                     .iter()
                     .any(|region| region.kind == ControlRegionKind::ElseBody)
             );
-            assert!(branch.outcome_labels.contains(&"else".to_string()));
+            assert!(branch.outcome_labels.contains(&Sym::new("else")));
         } else {
             assert!(
                 branch
                     .outcome_labels
-                    .contains(&"implicit-fallthrough".to_string())
+                    .contains(&Sym::new("implicit-fallthrough"))
             );
         }
         assert!(!branch.controlled_statement_ids.is_empty());
@@ -817,7 +819,7 @@ mod tests {
         assert!(
             loop_condition
                 .outcome_labels
-                .contains(&"continue".to_string())
+                .contains(&Sym::new("continue"))
         );
         assert_region_contains_edges(graph, loop_condition);
     }
@@ -838,7 +840,7 @@ mod tests {
             exception.continuation.as_ref().map(|point| point.kind),
             Some(ContinuationKind::Finally)
         );
-        assert!(exception.outcome_labels.contains(&"exception".to_string()));
+        assert!(exception.outcome_labels.contains(&Sym::new("exception")));
         assert_region_contains_edges(graph, exception);
     }
 
@@ -1086,13 +1088,13 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start_row: start_byte,
+            start_row: start_byte as u32,
             start_column: 0,
-            end_row: end_byte,
+            end_row: end_byte as u32,
             end_column: 0,
         }
     }

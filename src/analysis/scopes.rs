@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::SourceSpan;
@@ -44,7 +45,7 @@ fn normalize_existing_scopes(graph: &mut ProgramSupergraph) {
             continue;
         };
         scope.variant = variant_for_existing_scope(scope.kind);
-        scope.language_variant = language_variant(scope.kind, scope.variant, Some(&language));
+        scope.language_variant = (language_variant(scope.kind, scope.variant, Some(&language))).map(Sym::from);
         scope.binding_behavior = ScopeBindingBehavior::Boundary;
     }
 }
@@ -259,11 +260,11 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
                     artifact_id: planned.artifact_id.clone(),
                     kind: planned.kind,
                     variant: planned.variant,
-                    language_variant: language_variant(
+                    language_variant: (language_variant(
                         planned.kind,
                         planned.variant,
                         Some(planned.language.as_str()),
-                    ),
+                    )).map(Sym::from),
                     binding_behavior,
                     owner_callable_id: planned.owner_callable_id.clone(),
                     span: planned.span,
@@ -431,7 +432,7 @@ fn nearest_parent_scope(
             scope
                 .span
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                .unwrap_or(usize::MAX)
+                .unwrap_or(usize::MAX as u32)
         })
         .map(|scope| scope.scope_id.clone())
         .or_else(|| {
@@ -469,7 +470,7 @@ fn nearest_scope_for_fact(
             scope
                 .span
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                .unwrap_or(usize::MAX)
+                .unwrap_or(usize::MAX as u32)
         })
         .map(|scope| scope.scope_id.clone())
 }
@@ -634,14 +635,14 @@ fn parser_evidence(
 ) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Parser,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: Some(artifact_id),
         source_span: span,
         content_hash: None,
         syntax: Some(SyntaxReference {
-            kind: syntax_kind.to_string(),
-            node_key: span.map(|span| format!("scope:{}", span_key(span))),
-            field_path: Vec::new(),
+            kind: Sym::from(syntax_kind.to_string()),
+            key_prefix: span.map(|_| Sym::new("scope")),
+            field_path: Box::default(),
         }),
     }]
 }
@@ -1031,13 +1032,13 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start_row: start_byte,
+            start_row: start_byte as u32,
             start_column: 0,
-            end_row: end_byte,
+            end_row: end_byte as u32,
             end_column: 0,
         }
     }

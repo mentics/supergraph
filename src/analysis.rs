@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -215,7 +216,7 @@ pub fn enrich_supergraph_with_semantic_flows(
 
 pub(crate) struct SemanticContext<'a> {
     project: &'a ProjectAst,
-    artifacts_by_path: BTreeMap<String, sg::Artifact>,
+    artifacts_by_path: BTreeMap<Sym, sg::Artifact>,
     callables_by_owner: BTreeMap<String, sg::Callable>,
     call_sites_by_key: BTreeMap<String, sg::CallSite>,
 }
@@ -282,7 +283,7 @@ impl<'a> SemanticContext<'a> {
     pub(crate) fn semantic_callables(&'a self) -> Vec<SemanticCallable<'a>> {
         let mut callables = Vec::new();
         for file in &self.project.files {
-            let Some(artifact) = self.artifacts_by_path.get(&file.path) else {
+            let Some(artifact) = self.artifacts_by_path.get(&Sym::from(&file.path)) else {
                 continue;
             };
 
@@ -456,7 +457,7 @@ pub(crate) fn owner(artifact_id: NodeId, callable_id: NodeId) -> SourceOwnership
 pub fn inference_evidence(summary: impl Into<String>) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Inference,
-        summary: summary.into(),
+        summary: Sym::from(summary.into()),
         source_id: None,
         source_span: None,
         content_hash: None,

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::ast::{CallContext, SourceSpan};
+use crate::intern::Sym;
 
 pub const SCHEMA_VERSION: &str = "program-supergraph.v2";
 pub const DOMAIN_KNOWLEDGE_RECORD_SCHEMA_VERSION: &str = "domain-knowledge-record.v1";
@@ -105,6 +106,12 @@ impl ProgramSupergraph {
             out.write_all(&indexes)?;
             out.write_all(b"}")
         })
+    }
+
+    /// Drops the lazily built id membership sets (memory probe / after bulk mutation).
+    #[doc(hidden)]
+    pub fn drop_id_cache(&mut self) {
+        self.id_cache = IdCache::default();
     }
 
     pub(crate) fn invalidate_id_cache(&mut self) {
@@ -295,14 +302,74 @@ pub enum Uncertainty {
     Unsupported,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Evidence {
     pub kind: EvidenceKind,
-    pub summary: String,
+    pub summary: Sym,
     pub source_id: Option<NodeId>,
     pub source_span: Option<SourceSpan>,
-    pub content_hash: Option<String>,
+    pub content_hash: Option<Sym>,
     pub syntax: Option<SyntaxReference>,
+}
+
+impl Serialize for Evidence {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Evidence", 6)?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("summary", &self.summary)?;
+        state.serialize_field("source_id", &self.source_id)?;
+        state.serialize_field("source_span", &self.source_span)?;
+        state.serialize_field("content_hash", &self.content_hash)?;
+        let syntax = self.syntax.as_ref().map(|syntax| SyntaxReferenceView {
+            kind: syntax.kind,
+            node_key: syntax.node_key(self.source_span),
+            field_path: &*syntax.field_path,
+        });
+        state.serialize_field("syntax", &syntax)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Evidence {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            kind: EvidenceKind,
+            summary: Sym,
+            source_id: Option<NodeId>,
+            source_span: Option<SourceSpan>,
+            content_hash: Option<Sym>,
+            syntax: Option<RawSyntax>,
+        }
+        #[derive(Deserialize)]
+        struct RawSyntax {
+            kind: Sym,
+            node_key: Option<String>,
+            #[serde(default)]
+            field_path: Vec<Sym>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Evidence {
+            kind: raw.kind,
+            summary: raw.summary,
+            source_id: raw.source_id,
+            source_span: raw.source_span,
+            content_hash: raw.content_hash,
+            syntax: raw.syntax.map(|syntax| {
+                SyntaxReference {
+                    kind: syntax.kind,
+                    // The node key is `{prefix}:{span key}`; only the prefix is stored.
+                    key_prefix: syntax
+                        .node_key
+                        .as_deref()
+                        .and_then(|key| key.split_once(':'))
+                        .map(|(prefix, _)| Sym::new(prefix)),
+                    field_path: syntax.field_path.into(),
+                }
+            }),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -314,19 +381,38 @@ pub enum EvidenceKind {
     User,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SyntaxReference {
-    pub kind: String,
-    pub node_key: Option<String>,
-    pub field_path: Vec<String>,
+    pub kind: Sym,
+    /// Prefix of the serialized `node_key` (`{prefix}:{span key}`); the key itself is derived
+    /// from the owning evidence's source span instead of being stored per item.
+    pub key_prefix: Option<Sym>,
+    pub field_path: Box<[Sym]>,
+}
+
+impl SyntaxReference {
+    pub fn node_key(&self, span: Option<SourceSpan>) -> Option<String> {
+        let (prefix, span) = (self.key_prefix?, span?);
+        Some(format!(
+            "{prefix}:{}:{}:{}:{}:{}:{}",
+            span.start_byte, span.end_byte, span.start_row, span.start_column, span.end_row, span.end_column
+        ))
+    }
+}
+
+#[derive(Serialize)]
+struct SyntaxReferenceView<'a> {
+    kind: Sym,
+    node_key: Option<String>,
+    field_path: &'a [Sym],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
     pub artifact_id: NodeId,
-    pub path: String,
-    pub module_path: String,
-    pub content_hash: Option<String>,
+    pub path: Sym,
+    pub module_path: Sym,
+    pub content_hash: Option<Sym>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,7 +424,7 @@ pub struct Scope {
     #[serde(default)]
     pub variant: ScopeVariant,
     #[serde(default)]
-    pub language_variant: Option<String>,
+    pub language_variant: Option<Sym>,
     #[serde(default)]
     pub binding_behavior: ScopeBindingBehavior,
     pub owner_callable_id: Option<NodeId>,
@@ -381,7 +467,7 @@ pub enum ScopeBindingBehavior {
 pub struct Binding {
     pub binding_id: NodeId,
     pub scope_id: NodeId,
-    pub name: String,
+    pub name: Sym,
     pub kind: BindingKind,
     pub target: BindingTarget,
     pub span: SourceSpan,
@@ -404,29 +490,29 @@ pub enum BindingKind {
 pub enum BindingTarget {
     Callable(NodeId),
     /// Qualified class name.
-    Class(String),
+    Class(Sym),
     /// Module path.
-    Module(String),
+    Module(Sym),
     /// Qualified external name.
-    External(String),
-    Value(String),
-    Unresolved(String),
+    External(Sym),
+    Value(Sym),
+    Unresolved(Sym),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Callable {
     pub callable_id: NodeId,
     pub kind: CallableKind,
-    pub name: Option<String>,
-    pub qualified_name: String,
+    pub name: Option<Sym>,
+    pub qualified_name: Sym,
     pub artifact_id: NodeId,
     pub declaration_span: SourceSpan,
     pub body_span: Option<SourceSpan>,
     pub signature: Signature,
     pub scope_id: NodeId,
-    pub attributes: Vec<String>,
+    pub attributes: Vec<Sym>,
     pub incoming_local_call_count: usize,
-    pub external_invocation_metadata: Vec<String>,
+    pub external_invocation_metadata: Vec<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -440,8 +526,8 @@ pub enum CallableKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
-    pub parameters: Vec<String>,
-    pub return_annotation: Option<String>,
+    pub parameters: Vec<Sym>,
+    pub return_annotation: Option<Sym>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,7 +536,7 @@ pub struct CallSite {
     pub artifact_id: NodeId,
     pub enclosing_callable_id: NodeId,
     pub span: SourceSpan,
-    pub callee_expression: String,
+    pub callee_expression: Sym,
     pub argument_shape: ArgumentShape,
     pub dispatch_kind: DispatchKind,
     pub context: CallContext,
@@ -459,7 +545,7 @@ pub struct CallSite {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArgumentShape {
     pub positional_count: usize,
-    pub named_arguments: Vec<String>,
+    pub named_arguments: Vec<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -475,14 +561,14 @@ pub enum DispatchKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalTarget {
     pub external_target_id: NodeId,
-    pub ecosystem: String,
-    pub package_name: Option<String>,
-    pub package_version: Option<String>,
-    pub module_path: Option<String>,
-    pub qualified_name: String,
-    pub member_path: Option<String>,
+    pub ecosystem: Sym,
+    pub package_name: Option<Sym>,
+    pub package_version: Option<Sym>,
+    pub module_path: Option<Sym>,
+    pub qualified_name: Sym,
+    pub member_path: Option<Sym>,
     pub target_kind: ExternalTargetKind,
-    pub source: String,
+    pub source: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -524,7 +610,7 @@ pub struct StatementControlEffect {
     pub kind: StatementControlEffectKind,
     pub target_statement_id: Option<NodeId>,
     pub fallthrough: FallthroughBehavior,
-    pub description: String,
+    pub description: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -552,7 +638,7 @@ pub struct Expression {
     pub child_expression_ids: Vec<NodeId>,
     pub symbol_id: Option<NodeId>,
     pub value_id: Option<NodeId>,
-    pub original_text: Option<String>,
+    pub original_text: Option<Sym>,
     pub normalized: NormalizedExpression,
 }
 
@@ -575,10 +661,10 @@ pub enum ExpressionKind {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NormalizedExpression {
-    pub canonical: Option<String>,
-    pub operator: Option<String>,
-    pub identifier: Option<String>,
-    pub member: Option<String>,
+    pub canonical: Option<Sym>,
+    pub operator: Option<Sym>,
+    pub identifier: Option<Sym>,
+    pub member: Option<Sym>,
     pub literal: Option<ValueLiteral>,
 }
 
@@ -591,7 +677,7 @@ pub struct Condition {
     pub expression_id: Option<NodeId>,
     pub kind: ConditionKind,
     pub controlled_statement_ids: Vec<NodeId>,
-    pub outcome_labels: Vec<String>,
+    pub outcome_labels: Vec<Sym>,
     #[serde(default)]
     pub regions: Vec<ControlRegion>,
     #[serde(default)]
@@ -616,7 +702,7 @@ pub enum ConditionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlRegion {
     pub kind: ControlRegionKind,
-    pub label: String,
+    pub label: Sym,
     pub statement_ids: Vec<NodeId>,
     pub entry_statement_id: Option<NodeId>,
     pub exit_statement_id: Option<NodeId>,
@@ -639,7 +725,7 @@ pub enum ControlRegionKind {
 pub struct ContinuationPoint {
     pub kind: ContinuationKind,
     pub target_statement_id: Option<NodeId>,
-    pub description: String,
+    pub description: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -670,7 +756,7 @@ pub enum FallthroughBehavior {
 pub struct Symbol {
     pub symbol_id: NodeId,
     pub scope_id: NodeId,
-    pub name: String,
+    pub name: Sym,
     pub kind: SymbolKind,
     pub binding_id: Option<NodeId>,
     pub resolution: Resolution,
@@ -697,7 +783,7 @@ pub struct Definition {
     pub symbol_id: Option<NodeId>,
     pub value_id: Option<NodeId>,
     pub kind: DefinitionKind,
-    pub name: Option<String>,
+    pub name: Option<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -719,7 +805,7 @@ pub struct Use {
     pub symbol_id: Option<NodeId>,
     pub value_id: Option<NodeId>,
     pub kind: UseKind,
-    pub name: Option<String>,
+    pub name: Option<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -746,12 +832,12 @@ pub struct Value {
     #[serde(default)]
     pub call_site_id: Option<NodeId>,
     #[serde(default)]
-    pub name: Option<String>,
+    pub name: Option<Sym>,
     #[serde(default)]
     pub ordinal: Option<usize>,
     #[serde(default)]
     pub state_of_value_id: Option<NodeId>,
-    pub type_hint: Option<String>,
+    pub type_hint: Option<Sym>,
     pub literal: Option<ValueLiteral>,
 }
 
@@ -1091,8 +1177,8 @@ pub struct ControlFlowNode {
     pub cfg_node_id: NodeId,
     pub callable_id: NodeId,
     pub role: ControlFlowNodeRole,
-    pub label: String,
-    pub semantic_kind: Option<String>,
+    pub label: Sym,
+    pub semantic_kind: Option<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1111,9 +1197,9 @@ pub struct DataFlowNode {
     pub data_flow_node_id: NodeId,
     pub callable_id: NodeId,
     pub role: DataFlowNodeRole,
-    pub name: Option<String>,
-    pub text: String,
-    pub semantic_kind: Option<String>,
+    pub name: Option<Sym>,
+    pub text: Sym,
+    pub semantic_kind: Option<Sym>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1126,9 +1212,9 @@ pub enum DataFlowNodeRole {
 pub struct Requirement {
     pub requirement_id: NodeId,
     pub kind: RequirementKind,
-    pub title: String,
-    pub summary: String,
-    pub source_rule: String,
+    pub title: Sym,
+    pub summary: Sym,
+    pub source_rule: Sym,
     #[serde(default)]
     pub path_conditions: Vec<PathConditionSummary>,
 }
@@ -1154,7 +1240,7 @@ pub struct PathConditionSummary {
     pub outcome: ControlFlowOutcome,
     #[serde(default)]
     pub branch_arm: Option<ControlFlowBranchArm>,
-    pub summary: String,
+    pub summary: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1226,7 +1312,7 @@ pub struct Calls {
     pub caller_callable_id: NodeId,
     pub callee_callable_id: Option<NodeId>,
     pub external_target_id: Option<NodeId>,
-    pub unresolved_target: Option<String>,
+    pub unresolved_target: Option<Sym>,
     pub call_site_id: NodeId,
     pub kind: CallEdgeKind,
     pub resolution: Resolution,
@@ -1240,7 +1326,7 @@ pub struct ControlFlow {
     pub outcome: ControlFlowOutcome,
     #[serde(default)]
     pub branch_arm: Option<ControlFlowBranchArm>,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1272,7 +1358,7 @@ pub enum ControlFlowOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlFlowBranchArm {
-    pub label: String,
+    pub label: Sym,
     pub ordinal: usize,
     pub region_kind: Option<ControlRegionKind>,
 }
@@ -1282,29 +1368,29 @@ pub struct Controls {
     pub callable_id: NodeId,
     pub condition_id: NodeId,
     pub controlled_id: NodeId,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Defines {
     pub callable_id: NodeId,
     pub definition_id: NodeId,
-    pub name: String,
+    pub name: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Uses {
     pub callable_id: NodeId,
     pub use_id: NodeId,
-    pub name: String,
+    pub name: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataFlow {
     pub callable_id: NodeId,
-    pub name: String,
+    pub name: Sym,
     pub flow_kind: DataFlowKind,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1326,9 +1412,9 @@ pub struct ParameterIn {
     pub call_site_id: NodeId,
     pub caller_callable_id: NodeId,
     pub callee_callable_id: NodeId,
-    pub parameter_name: String,
+    pub parameter_name: Sym,
     pub ordinal: usize,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1336,7 +1422,7 @@ pub struct ReturnsTo {
     pub call_site_id: NodeId,
     pub caller_callable_id: NodeId,
     pub callee_callable_id: NodeId,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1344,9 +1430,9 @@ pub struct ParameterOut {
     pub call_site_id: NodeId,
     pub caller_callable_id: NodeId,
     pub callee_callable_id: NodeId,
-    pub parameter_name: String,
+    pub parameter_name: Sym,
     pub ordinal: usize,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1357,10 +1443,10 @@ pub struct ThrowsTo {
     #[serde(default)]
     pub target_kind: ThrowsToTargetKind,
     #[serde(default)]
-    pub exception_value: Option<String>,
+    pub exception_value: Option<Sym>,
     #[serde(default)]
-    pub exception_type: Option<String>,
-    pub precision: String,
+    pub exception_type: Option<Sym>,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1389,21 +1475,21 @@ pub struct Conditions {
 pub struct Orders {
     pub predecessor_requirement_id: NodeId,
     pub successor_requirement_id: NodeId,
-    pub order_key: String,
+    pub order_key: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TracesTo {
     pub requirement_id: NodeId,
     pub code_fact_id: NodeId,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependsOnDomainKnowledge {
     pub requirement_id: NodeId,
     pub domain_knowledge_id: NodeId,
-    pub precision: String,
+    pub precision: Sym,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1514,7 +1600,7 @@ impl<'de> Deserialize<'de> for SourceSpanIndexKey {
         }
 
         let parse = |part: &str| {
-            part.parse::<usize>()
+            part.parse::<u32>()
                 .map_err(|_| de::Error::custom("invalid source span index key number"))
         };
 

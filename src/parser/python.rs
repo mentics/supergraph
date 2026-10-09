@@ -854,12 +854,12 @@ fn span(node: Node) -> SourceSpan {
     let start = node.start_position();
     let end = node.end_position();
     SourceSpan {
-        start_byte: node.start_byte(),
-        end_byte: node.end_byte(),
-        start_row: start.row,
-        start_column: start.column,
-        end_row: end.row,
-        end_column: end.column,
+        start_byte: node.start_byte() as u32,
+        end_byte: node.end_byte() as u32,
+        start_row: start.row as u32,
+        start_column: start.column as u32,
+        end_row: end.row as u32,
+        end_column: end.column as u32,
     }
 }
 

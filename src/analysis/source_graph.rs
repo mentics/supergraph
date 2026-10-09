@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{CallAst, FileAst, ProjectAst, SourceSpan, SymbolAst, SymbolKind};
@@ -127,8 +128,8 @@ where
         self.builder.add_artifact(
             Artifact {
                 artifact_id: artifact_id.clone(),
-                path: file.path.clone(),
-                module_path: module_path.clone(),
+                path: Sym::from(file.path.clone()),
+                module_path: Sym::from(module_path.clone()),
                 content_hash: None,
             },
             vec![self.source_evidence("source artifact", Some(module_span))],
@@ -172,8 +173,8 @@ where
             Callable {
                 callable_id: module_initializer_id.clone(),
                 kind: CallableKind::ModuleInitializer,
-                name: Some("<module>".to_string()),
-                qualified_name: format!("{module_path}.<module>"),
+                name: Some(Sym::new("<module>")),
+                qualified_name: Sym::from(format!("{module_path}.<module>")),
                 artifact_id: artifact_id.clone(),
                 declaration_span: module_span,
                 body_span: Some(module_span),
@@ -298,9 +299,9 @@ where
             Binding {
                 binding_id: source_id(Tag::Binding, id_parts![&module_scope_id, &symbol.name]),
                 scope_id: module_scope_id,
-                name: symbol.name.clone(),
+                name: Sym::from(symbol.name.clone()),
                 kind: BindingKind::Class,
-                target: BindingTarget::Class(class_name.clone()),
+                target: BindingTarget::Class(Sym::from(class_name.clone())),
                 span: symbol.source_span,
             },
             artifact_id,
@@ -312,12 +313,12 @@ where
                 callable_id: implicit_constructor_id.clone(),
                 kind: CallableKind::Constructor,
                 name: Some(
-                    self.adapter
+                    Sym::from(self.adapter
                         .constructor_method_name()
                         .unwrap_or("constructor")
-                        .to_string(),
+                        .to_string()),
                 ),
-                qualified_name: implicit_constructor_name,
+                qualified_name: Sym::from(implicit_constructor_name),
                 artifact_id,
                 declaration_span: symbol.source_span,
                 body_span: symbol.body_span,
@@ -326,7 +327,7 @@ where
                     return_annotation: None,
                 },
                 scope_id: class_scope_id.clone(),
-                attributes: vec!["implicit_constructor".to_string()],
+                attributes: vec![Sym::new("implicit_constructor")],
                 incoming_local_call_count: 0,
                 external_invocation_metadata: Vec::new(),
             },
@@ -416,7 +417,7 @@ where
                     Binding {
                         binding_id: source_id(Tag::Binding, id_parts![class_scope_id, &symbol.name]),
                         scope_id: class_scope_id.clone(),
-                        name: symbol.name.clone(),
+                        name: Sym::from(symbol.name.clone()),
                         kind: BindingKind::Method,
                         target: BindingTarget::Callable(callable_id.clone()),
                         span: symbol.source_span,
@@ -430,7 +431,7 @@ where
                 Binding {
                     binding_id: source_id(Tag::Binding, id_parts![module_scope_id, &symbol.name]),
                     scope_id: module_scope_id.clone(),
-                    name: symbol.name.clone(),
+                    name: Sym::from(symbol.name.clone()),
                     kind: BindingKind::Function,
                     target: BindingTarget::Callable(callable_id.clone()),
                     span: symbol.source_span,
@@ -445,9 +446,9 @@ where
                 Binding {
                     binding_id: source_id(Tag::Binding, id_parts![&scope_id, &parameter.name]),
                     scope_id: scope_id.clone(),
-                    name: parameter.name.clone(),
+                    name: Sym::from(parameter.name.clone()),
                     kind: BindingKind::Parameter,
-                    target: BindingTarget::Value(parameter.text.clone()),
+                    target: BindingTarget::Value(Sym::from(parameter.text.clone())),
                     span: parameter.source_span,
                 },
                 artifact_id,
@@ -460,13 +461,13 @@ where
                 Binding {
                     binding_id: source_id(Tag::Binding, id_parts![&scope_id, &assignment.target]),
                     scope_id: scope_id.clone(),
-                    name: assignment.target.clone(),
+                    name: Sym::from(assignment.target.clone()),
                     kind: BindingKind::Assignment,
                     target: BindingTarget::Value(
-                        assignment
+                        Sym::from(assignment
                             .value
                             .clone()
-                            .unwrap_or_else(|| assignment.text.clone()),
+                            .unwrap_or_else(|| assignment.text.clone())),
                     ),
                     span: assignment.source_span,
                 },
@@ -481,8 +482,8 @@ where
             Callable {
                 callable_id: callable_id.clone(),
                 kind: self.adapter.callable_kind(symbol),
-                name: Some(symbol.name.clone()),
-                qualified_name,
+                name: Some(Sym::from(symbol.name.clone())),
+                qualified_name: Sym::from(qualified_name),
                 artifact_id,
                 declaration_span: symbol.source_span,
                 body_span: symbol.body_span,
@@ -490,15 +491,15 @@ where
                     parameters: symbol
                         .parameters
                         .iter()
-                        .map(|parameter| parameter.text.clone())
+                        .map(|parameter| Sym::from(&parameter.text))
                         .collect(),
-                    return_annotation: symbol.return_type.clone(),
+                    return_annotation: (symbol.return_type.clone()).map(Sym::from),
                 },
                 scope_id: scope_id.clone(),
                 attributes: symbol
                     .decorators
                     .iter()
-                    .map(|decorator| format!("decorator:{}", decorator.text))
+                    .map(|decorator| Sym::from(format!("decorator:{}", decorator.text)))
                     .collect(),
                 incoming_local_call_count: 0,
                 external_invocation_metadata: Vec::new(),
@@ -568,9 +569,9 @@ where
                             &graph_context,
                         )
                     } else if self.local_modules.contains(&normalized_module) {
-                        BindingTarget::Module(normalized_module.clone())
+                        BindingTarget::Module(Sym::from(normalized_module.clone()))
                     } else {
-                        BindingTarget::External(format!("{normalized_module}.{local_name}"))
+                        BindingTarget::External(Sym::from(format!("{normalized_module}.{local_name}")))
                     };
                     let binding = ImportBinding {
                         module_path: normalized_module.clone(),
@@ -586,7 +587,7 @@ where
                                 id_parts![&context.module_scope_id, &local_name],
                             ),
                             scope_id: context.module_scope_id.clone(),
-                            name: local_name,
+                            name: Sym::from(local_name),
                             kind: BindingKind::Import,
                             target,
                             span: import.source_span,
@@ -731,7 +732,7 @@ where
             artifact_id: pending.artifact_id.clone(),
             enclosing_callable_id: pending.caller_callable_id.clone(),
             span: pending.call.source_span,
-            callee_expression: pending.call.callee.clone(),
+            callee_expression: Sym::from(pending.call.callee.clone()),
             argument_shape: call_site_argument_shape(&pending.call),
             dispatch_kind: self.adapter.dispatch_kind(&pending.call),
             context: pending.call.context,
@@ -761,7 +762,7 @@ where
                 caller_callable_id: pending.caller_callable_id.clone(),
                 callee_callable_id,
                 external_target_id,
-                unresolved_target,
+                unresolved_target: unresolved_target.map(Sym::from),
                 call_site_id,
                 kind,
                 resolution,
@@ -791,7 +792,7 @@ where
             {
                 callable
                     .external_invocation_metadata
-                    .push("decorated_callable".to_string());
+                    .push(Sym::new("decorated_callable"));
             }
         });
     }
@@ -852,7 +853,7 @@ where
     ) -> Evidence {
         Evidence {
             kind,
-            summary: format!("{} ({})", summary.into(), self.adapter.analysis_version()),
+            summary: Sym::from(format!("{} ({})", summary.into(), self.adapter.analysis_version())),
             source_id: None,
             source_span: span,
             content_hash: None,
@@ -912,7 +913,7 @@ where
                 .map(|context| context.artifact_id.clone()),
             BindingTarget::Class(class_name) => self
                 .class_summaries
-                .get(class_name)
+                .get(class_name.as_str())
                 .map(|class| class.scope_id.clone()),
             BindingTarget::Value(_) | BindingTarget::Unresolved(_) => None,
         }
@@ -1028,7 +1029,7 @@ fn binding_resolution(target: &BindingTarget) -> Option<Resolution> {
 fn call_site_argument_shape(call: &CallAst) -> ArgumentShape {
     ArgumentShape {
         positional_count: call.args_count.saturating_sub(call.argument_names.len()),
-        named_arguments: call.argument_names.clone(),
+        named_arguments: (call.argument_names.clone()).into_iter().map(Sym::from).collect(),
     }
 }
 
@@ -1085,14 +1086,14 @@ mod tests {
         ) -> ExternalTarget {
             ExternalTarget {
                 external_target_id: source_id(Tag::External, id_parts![qualified_name]),
-                ecosystem: "test".to_string(),
+                ecosystem: Sym::from("test".to_string()),
                 package_name: None,
                 package_version: None,
-                module_path: module_path.map(str::to_string),
-                qualified_name: qualified_name.to_string(),
-                member_path: member_path.map(str::to_string),
+                module_path: (module_path.map(str::to_string)).map(Sym::from),
+                qualified_name: Sym::from(qualified_name.to_string()),
+                member_path: (member_path.map(str::to_string)).map(Sym::from),
                 target_kind,
-                source: source.to_string(),
+                source: Sym::from(source.to_string()),
             }
         }
 
@@ -1228,12 +1229,12 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
+            start_byte: start as u32,
+            end_byte: end as u32,
             start_row: 0,
-            start_column: start,
+            start_column: start as u32,
             end_row: 0,
-            end_column: end,
+            end_column: end as u32,
         }
     }
 }

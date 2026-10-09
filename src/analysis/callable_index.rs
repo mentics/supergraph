@@ -81,7 +81,7 @@ impl CallableIndex {
             }
             NodeFact::Binding(binding) if binding.kind == BindingKind::Parameter => {
                 self.parameter_binding_spans
-                    .entry((binding.scope_id.clone(), binding.name.clone()))
+                    .entry((binding.scope_id.clone(), (binding.name.clone()).to_string()))
                     .or_insert(binding.span);
             }
             NodeFact::Definition(definition) => {
@@ -89,7 +89,7 @@ impl CallableIndex {
                     (&definition.name, node.span, &definition.value_id)
                 {
                     self.definition_values
-                        .entry((definition.callable_id.clone(), name.clone(), span))
+                        .entry((definition.callable_id.clone(), (name.clone()).to_string(), span))
                         .or_insert_with(|| value_id.clone());
                 }
             }
@@ -98,7 +98,7 @@ impl CallableIndex {
                     (&use_fact.name, node.span, &use_fact.value_id)
                 {
                     self.use_values
-                        .entry((use_fact.callable_id.clone(), name.clone(), span))
+                        .entry((use_fact.callable_id.clone(), (name.clone()).to_string(), span))
                         .or_insert_with(|| value_id.clone());
                 }
             }

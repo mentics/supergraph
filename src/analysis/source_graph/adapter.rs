@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{AssignmentAst, CallAst, CallContext, FileAst, ProjectAst, SymbolAst, SymbolKind};
@@ -170,11 +171,11 @@ pub(crate) trait LanguageSupergraphAdapter {
         if let Some(callable) = context.local_callables.get(&qualified) {
             BindingTarget::Callable(*callable)
         } else if context.classes.contains_key(&qualified) {
-            BindingTarget::Class(qualified)
+            BindingTarget::Class(Sym::from(qualified))
         } else if context.local_modules.contains(module) {
-            BindingTarget::Unresolved(qualified)
+            BindingTarget::Unresolved(Sym::from(qualified))
         } else {
-            BindingTarget::External(qualified)
+            BindingTarget::External(Sym::from(qualified))
         }
     }
 
@@ -190,14 +191,14 @@ pub(crate) trait LanguageSupergraphAdapter {
             .resolve_class_name(module_path, callee)
             .map(|class| class.qualified_name.clone())
             .or_else(|| {
-                context
+                (context
                     .files
                     .get(&file.path)
                     .and_then(|file_context| file_context.imports.get(callee))
                     .and_then(|import| match &import.target {
                         BindingTarget::Class(class_name) => Some(class_name.clone()),
                         _ => None,
-                    })
+                    })).map(|sym| sym.to_string())
             })
     }
 
@@ -208,14 +209,14 @@ pub(crate) trait LanguageSupergraphAdapter {
         context: &GraphContext,
     ) -> Option<String> {
         let callee = assignment.value.as_deref().and_then(call_expression_name)?;
-        context
+        (context
             .files
             .get(&file.path)
             .and_then(|file_context| file_context.imports.get(callee))
             .and_then(|import| match &import.target {
                 BindingTarget::External(external) => Some(external.clone()),
                 _ => None,
-            })
+            })).map(|sym| sym.to_string())
     }
 
     fn populate_field_flow(&self, _project: &ProjectAst, _context: &mut FieldFlowContext<'_>) {}

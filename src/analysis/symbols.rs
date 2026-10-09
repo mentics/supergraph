@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ast::{DefinitionAst, DefinitionKind as AstDefinitionKind, SourceSpan, UseAst};
@@ -62,7 +63,7 @@ struct ScopedStatements {
 impl ScopedStatements {
     fn push(&mut self, span: SourceSpan, scope_id: NodeId) {
         let previous = self.prefix_max_end.last().copied().unwrap_or(0);
-        self.prefix_max_end.push(previous.max(span.end_byte));
+        self.prefix_max_end.push(previous.max(span.end_byte as usize));
         self.entries.push((span, scope_id));
     }
 
@@ -70,7 +71,7 @@ impl ScopedStatements {
     fn first_scope_containing(&self, span: SourceSpan) -> Option<NodeId> {
         let first = self
             .prefix_max_end
-            .partition_point(|max_end| *max_end < span.end_byte);
+            .partition_point(|max_end| *max_end < span.end_byte as usize);
         self.entries[first..]
             .iter()
             .find(|(candidate, _)| span_contains(*candidate, span))
@@ -103,7 +104,7 @@ impl ScopeTree {
         let size = order.len().next_power_of_two().max(1);
         let mut summary = vec![(usize::MAX, 0usize); size * 2];
         for (index, (_, span, _)) in order.iter().enumerate() {
-            summary[size + index] = (span.start_byte, span.end_byte);
+            summary[size + index] = (span.start_byte as usize, span.end_byte as usize);
         }
         for node in (1..size).rev() {
             let (left, right) = (summary[node * 2], summary[node * 2 + 1]);
@@ -127,7 +128,7 @@ impl ScopeTree {
 
     fn first_containing(&self, node: usize, span: SourceSpan) -> Option<usize> {
         let (min_start, max_end) = self.summary[node];
-        if min_start > span.start_byte || max_end < span.end_byte {
+        if min_start > span.start_byte as usize || max_end < span.end_byte as usize {
             return None;
         }
         if node >= self.size {
@@ -229,11 +230,11 @@ impl LexicalTables {
                     if let Some(name) = &callable.name {
                         tables
                             .callable_by_name
-                            .entry(name.clone())
+                            .entry((name.clone()).to_string())
                             .or_insert_with(|| (position, callable.callable_id));
                         tables
                             .callable_by_artifact_and_name
-                            .entry((callable.artifact_id, name.clone()))
+                            .entry((callable.artifact_id, (name.clone()).to_string()))
                             .or_insert_with(|| callable.callable_id);
                     }
                 }
@@ -261,7 +262,7 @@ impl LexicalTables {
                 NodeFact::Binding(binding) => tables.register_binding(BindingInfo {
                     binding_id: binding.binding_id,
                     scope_id: binding.scope_id,
-                    name: binding.name.clone(),
+                    name: (binding.name.clone()).to_string(),
                     kind: binding.kind,
                     target: binding.target.clone(),
                     span: binding.span,
@@ -332,7 +333,7 @@ impl LexicalTables {
                 scope
                     .span
                     .map(|span| span.end_byte.saturating_sub(span.start_byte))
-                    .unwrap_or(usize::MAX)
+                    .unwrap_or(usize::MAX as u32)
             })
             .map(|scope| scope.scope_id)
             .or_else(|| {
@@ -451,14 +452,14 @@ fn emit_external_targets_for_existing_bindings(graph: &mut ProgramSupergraph) {
                 ),
                 NodeFact::ExternalTarget(sg::ExternalTarget {
                     external_target_id: target_id,
-                    ecosystem: "unknown".to_string(),
+                    ecosystem: Sym::new("unknown"),
                     package_name: None,
                     package_version: None,
                     module_path: None,
                     qualified_name: name,
                     member_path: None,
                     target_kind: ExternalTargetKind::Unknown,
-                    source: PRECISION.to_string(),
+                    source: Sym::from(PRECISION.to_string()),
                 }),
             ),
         );
@@ -586,7 +587,7 @@ fn emit_uses(
                     symbol_id: Some(symbol_id),
                     value_id: None,
                     kind: use_kind(use_fact.kind),
-                    name: Some(use_fact.name.clone()),
+                    name: Some(Sym::from(use_fact.name.clone())),
                 }),
             ),
         );
@@ -620,7 +621,7 @@ fn emit_static_receiver_fields(
                     scope_id: class_scope_id.clone(),
                     name: field.field.clone(),
                     kind: BindingKind::Field,
-                    target: BindingTarget::Value(field.text.clone()),
+                    target: BindingTarget::Value(Sym::from(field.text.clone())),
                     span: field.source_span,
                 };
                 insert_binding(graph, tables, binding.clone());
@@ -652,7 +653,7 @@ fn emit_static_receiver_fields(
                     symbol_id: Some(symbol_id),
                     value_id: None,
                     kind: sg::UseKind::FieldRead,
-                    name: Some(field.field.clone()),
+                    name: Some(Sym::from(field.field.clone())),
                 }),
             ),
         );
@@ -684,7 +685,7 @@ fn emit_static_receiver_fields(
                 EdgeFact::Uses(sg::Uses {
                     callable_id: semantic.callable().callable_id,
                     use_id: sg::use_id(callable_id, &field.field, field.source_span),
-                    name: field.field.clone(),
+                    name: Sym::from(field.field.clone()),
                 }),
             ),
         );
@@ -705,7 +706,7 @@ fn insert_binding(graph: &mut ProgramSupergraph, tables: &mut LexicalTables, bin
             NodeFact::Binding(sg::Binding {
                 binding_id: binding.binding_id,
                 scope_id: binding.scope_id,
-                name: binding.name.clone(),
+                name: Sym::from(binding.name.clone()),
                 kind: binding.kind,
                 target: binding.target.clone(),
                 span: binding.span,
@@ -747,7 +748,7 @@ fn ensure_symbol_for_binding(
         .or_insert_with(|| sg::Symbol {
             symbol_id: symbol_id,
             scope_id: binding.scope_id,
-            name: binding.name.clone(),
+            name: Sym::from(binding.name.clone()),
             kind: symbol_kind_for_binding(binding.kind),
             binding_id: Some(binding.binding_id),
             resolution: resolution_from_target(&binding.target),
@@ -768,7 +769,7 @@ fn ensure_symbol_for_binding(
             NodeFact::Symbol(sg::Symbol {
                 symbol_id: symbol_id,
                 scope_id: binding.scope_id,
-                name: binding.name.clone(),
+                name: Sym::from(binding.name.clone()),
                 kind: symbol_kind_for_binding(binding.kind),
                 binding_id: Some(binding.binding_id),
                 resolution: resolution_from_target(&binding.target),
@@ -799,7 +800,7 @@ fn ensure_placeholder_symbol(
             .or_insert_with(|| sg::Symbol {
                 symbol_id: symbol_id,
                 scope_id,
-                name: name.to_string(),
+                name: Sym::from(name.to_string()),
                 kind,
                 binding_id: None,
                 resolution,
@@ -820,7 +821,7 @@ fn ensure_placeholder_symbol(
                 NodeFact::Symbol(sg::Symbol {
                     symbol_id: symbol_id,
                     scope_id,
-                    name: name.to_string(),
+                    name: Sym::from(name.to_string()),
                     kind,
                     binding_id: None,
                     resolution,
@@ -869,7 +870,7 @@ fn emit_definition_node(
                 symbol_id: Some(symbol_id),
                 value_id: None,
                 kind: definition_kind(definition.kind),
-                name: Some(definition.name.clone()),
+                name: Some(Sym::from(definition.name.clone())),
             }),
         ),
     );
@@ -898,7 +899,7 @@ fn emit_definition_node(
             EdgeFact::Defines(sg::Defines {
                 callable_id,
                 definition_id,
-                name: definition.name.clone(),
+                name: Sym::from(definition.name.clone()),
             }),
         ),
     );
@@ -943,7 +944,7 @@ fn add_uses_edge(
             EdgeFact::Uses(sg::Uses {
                 callable_id: semantic.callable().callable_id,
                 use_id: use_id,
-                name: use_fact.name.clone(),
+                name: Sym::from(use_fact.name.clone()),
             }),
         ),
     );
@@ -1287,14 +1288,14 @@ fn ensure_resolution_placeholder_target(
             resolver_evidence("resolution placeholder target", span, "external-target"),
             NodeFact::ExternalTarget(sg::ExternalTarget {
                 external_target_id: target_id,
-                ecosystem: "unknown".to_string(),
+                ecosystem: Sym::new("unknown"),
                 package_name: None,
                 package_version: None,
                 module_path: None,
-                qualified_name: name.to_string(),
+                qualified_name: Sym::from(name.to_string()),
                 member_path: None,
                 target_kind: ExternalTargetKind::Unknown,
-                source: RESOLUTION_PRECISION.to_string(),
+                source: Sym::from(RESOLUTION_PRECISION.to_string()),
             }),
         ),
     );
@@ -1378,12 +1379,12 @@ fn binding_target_for_definition(
 ) -> BindingTarget {
     match definition.kind {
         AstDefinitionKind::Class => callable_or_scope_target(tables, &definition.name, scope_id)
-            .unwrap_or_else(|| BindingTarget::Unresolved(definition.name.clone())),
+            .unwrap_or_else(|| BindingTarget::Unresolved(Sym::from(definition.name.clone()))),
         AstDefinitionKind::Function => callable_target(tables, semantic, &definition.name)
-            .unwrap_or_else(|| BindingTarget::Unresolved(definition.name.clone())),
-        AstDefinitionKind::Import => BindingTarget::Unresolved(definition.text.clone()),
-        AstDefinitionKind::Unknown => BindingTarget::Unresolved(definition.text.clone()),
-        _ => BindingTarget::Value(definition.text.clone()),
+            .unwrap_or_else(|| BindingTarget::Unresolved(Sym::from(definition.name.clone()))),
+        AstDefinitionKind::Import => BindingTarget::Unresolved(Sym::from(definition.text.clone())),
+        AstDefinitionKind::Unknown => BindingTarget::Unresolved(Sym::from(definition.text.clone())),
+        _ => BindingTarget::Value(Sym::from(definition.text.clone())),
     }
 }
 
@@ -1399,10 +1400,10 @@ fn callable_or_scope_target(
         (Some((scope_position, scope_id)), Some((callable_position, _)))
             if scope_position < callable_position =>
         {
-            Some(BindingTarget::Class(scope_id.to_string()))
+            Some(BindingTarget::Class(Sym::from(scope_id.to_string())))
         }
         (_, Some((_, callable_id))) => Some(BindingTarget::Callable(*callable_id)),
-        (Some((_, scope_id)), None) => Some(BindingTarget::Class(scope_id.to_string())),
+        (Some((_, scope_id)), None) => Some(BindingTarget::Class(Sym::from(scope_id.to_string()))),
         (None, None) => None,
     }
 }
@@ -1568,14 +1569,14 @@ fn parser_evidence(
 ) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Parser,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: Some(semantic.artifact().artifact_id),
         source_span: span,
         content_hash: None,
         syntax: Some(SyntaxReference {
-            kind: syntax_kind.to_string(),
-            node_key: span.map(|span| format!("{syntax_kind}:{}", span_key(span))),
-            field_path: Vec::new(),
+            kind: Sym::from(syntax_kind.to_string()),
+            key_prefix: span.map(|_| Sym::new(syntax_kind)),
+            field_path: Box::default(),
         }),
     }]
 }
@@ -1583,14 +1584,14 @@ fn parser_evidence(
 fn resolver_evidence(summary: &str, span: Option<SourceSpan>, syntax_kind: &str) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Resolver,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: None,
         source_span: span,
         content_hash: None,
         syntax: Some(SyntaxReference {
-            kind: syntax_kind.to_string(),
-            node_key: span.map(|span| format!("{syntax_kind}:{}", span_key(span))),
-            field_path: Vec::new(),
+            kind: Sym::from(syntax_kind.to_string()),
+            key_prefix: span.map(|_| Sym::new(syntax_kind)),
+            field_path: Box::default(),
         }),
     }]
 }
@@ -2851,7 +2852,7 @@ mod tests {
         }
     }
 
-    fn call(callee: &str, receiver: Option<&str>, start_byte: usize, end_byte: usize) -> CallAst {
+    fn call(callee: &str, receiver: Option<&str>, start_byte: u32, end_byte: u32) -> CallAst {
         CallAst {
             callee: callee.to_string(),
             receiver: receiver.map(str::to_string),
@@ -2865,8 +2866,8 @@ mod tests {
     fn module_call(
         callee: &str,
         receiver: Option<&str>,
-        start_byte: usize,
-        end_byte: usize,
+        start_byte: u32,
+        end_byte: u32,
     ) -> CallAst {
         CallAst {
             callee: callee.to_string(),
@@ -2892,13 +2893,13 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start_row: start_byte,
+            start_row: start_byte as u32,
             start_column: 0,
-            end_row: end_byte,
+            end_row: end_byte as u32,
             end_column: 0,
         }
     }

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -49,7 +50,7 @@ impl PythonSupergraphAdapter {
                 evidence: vec![format!("import binding: {expression}")],
             },
             BindingTarget::Class(class_name) => {
-                if let Some(class) = context.classes.get(class_name) {
+                if let Some(class) = context.classes.get(class_name.as_str()) {
                     ResolvedCall::LocalTarget {
                         callee: class
                             .explicit_constructor_id
@@ -112,7 +113,7 @@ impl PythonSupergraphAdapter {
 
         if receiver == "self" {
             if let Some(class_name) = &pending.class_qualified_name {
-                if let Some(class) = context.classes.get(class_name) {
+                if let Some(class) = context.classes.get(class_name.as_str()) {
                     if let Some(callee) = class.methods.get(member) {
                         return ResolvedCall::LocalTarget {
                             callee: callee.clone(),
@@ -126,7 +127,7 @@ impl PythonSupergraphAdapter {
 
         if let Some(field) = receiver.strip_prefix("self.") {
             if let Some(class_name) = &pending.class_qualified_name {
-                if let Some(owner_class) = context.classes.get(class_name) {
+                if let Some(owner_class) = context.classes.get(class_name.as_str()) {
                     if let Some(field_class_name) = owner_class.fields.get(field) {
                         if let Some(field_class) = context.classes.get(field_class_name) {
                             if let Some(callee) = field_class.methods.get(member) {
@@ -208,7 +209,7 @@ impl PythonSupergraphAdapter {
                         evidence: vec![format!("external import: {receiver} -> {external}")],
                     },
                     BindingTarget::Class(class_name) => {
-                        if let Some(class) = context.classes.get(class_name) {
+                        if let Some(class) = context.classes.get(class_name.as_str()) {
                             if let Some(callee) = class.methods.get(member) {
                                 ResolvedCall::LocalTarget {
                                     callee: callee.clone(),
@@ -264,14 +265,14 @@ impl PythonSupergraphAdapter {
             .resolve_class_name(module_path, type_name)
             .map(|class| class.qualified_name.clone())
             .or_else(|| {
-                context
+                (context
                     .files
                     .get(file_path)
                     .and_then(|file_context| file_context.imports.get(type_name))
                     .and_then(|import| match &import.target {
                         BindingTarget::Class(class_name) => Some(class_name.clone()),
                         _ => None,
-                    })
+                    })).map(|sym| sym.to_string())
             })
     }
 }
@@ -516,18 +517,18 @@ fn external_target(
                 &format!("{target_kind:?}"),
             ],
         ),
-        ecosystem: package_name
+        ecosystem: Sym::from(package_name
             .as_deref()
             .map(ecosystem_for_package)
             .unwrap_or("unknown")
-            .to_string(),
-        package_name,
+            .to_string()),
+        package_name: package_name.map(Sym::from),
         package_version: None,
-        module_path,
-        qualified_name: qualified_name.to_string(),
-        member_path: member_path.map(str::to_string),
+        module_path: module_path.map(Sym::from),
+        qualified_name: Sym::from(qualified_name.to_string()),
+        member_path: (member_path.map(str::to_string)).map(Sym::from),
         target_kind,
-        source: source.to_string(),
+        source: Sym::from(source.to_string()),
     }
 }
 

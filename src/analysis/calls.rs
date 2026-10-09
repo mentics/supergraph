@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::supergraph::{
@@ -73,7 +74,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                     caller_callable_id: call_site.enclosing_callable_id.clone(),
                     callee_callable_id: call_target.callee_callable_id,
                     external_target_id: call_target.external_target_id,
-                    unresolved_target: call_target.unresolved_target,
+                    unresolved_target: (call_target.unresolved_target).map(Sym::from),
                     call_site_id: call_site.call_site_id.clone(),
                     kind: call_kind(call_site, target_kind, resolves_to.resolution),
                     resolution: resolves_to.resolution,
@@ -171,15 +172,15 @@ fn call_target_from_resolution(
             callee_callable_id: None,
             external_target_id: (resolution != Resolution::Unresolved)
                 .then(|| target_id),
-            unresolved_target: (resolution == Resolution::Unresolved)
-                .then(|| call_site.callee_expression.clone()),
+            unresolved_target: ((resolution == Resolution::Unresolved)
+                .then(|| call_site.callee_expression.clone())).map(|sym| sym.to_string()),
         }),
         NodeKind::Binding => Some(CallTarget {
             resolution_target_id: target_id,
             edge_target_id: None,
             callee_callable_id: None,
             external_target_id: None,
-            unresolved_target: Some(call_site.callee_expression.clone()),
+            unresolved_target: Some((call_site.callee_expression.clone()).to_string()),
         }),
         _ => None,
     }
@@ -356,8 +357,8 @@ mod tests {
             NodeFact::Callable(sg::Callable {
                 callable_id: test_id(id),
                 kind: sg::CallableKind::Function,
-                name: Some(id.to_string()),
-                qualified_name: id.to_string(),
+                name: Some(Sym::from(id.to_string())),
+                qualified_name: Sym::from(id.to_string()),
                 artifact_id: test_id("artifact"),
                 declaration_span: span(),
                 body_span: Some(span()),
@@ -380,9 +381,9 @@ mod tests {
             NodeFact::Binding(Binding {
                 binding_id: test_id(id),
                 scope_id: test_id("scope"),
-                name: name.to_string(),
+                name: Sym::from(name.to_string()),
                 kind: BindingKind::Assignment,
-                target: BindingTarget::Value(name.to_string()),
+                target: BindingTarget::Value(Sym::from(name.to_string())),
                 span: span(),
             }),
         )
@@ -394,14 +395,14 @@ mod tests {
             NodeKind::ExternalTarget,
             NodeFact::ExternalTarget(ExternalTarget {
                 external_target_id: test_id(id),
-                ecosystem: "test".to_string(),
+                ecosystem: Sym::from("test".to_string()),
                 package_name: None,
                 package_version: None,
                 module_path: None,
-                qualified_name: qualified_name.to_string(),
+                qualified_name: Sym::from(qualified_name.to_string()),
                 member_path: None,
                 target_kind: ExternalTargetKind::Unknown,
-                source: "test".to_string(),
+                source: Sym::from("test".to_string()),
             }),
         )
     }
@@ -415,7 +416,7 @@ mod tests {
                 artifact_id: test_id("artifact"),
                 enclosing_callable_id: test_id("caller"),
                 span: span(),
-                callee_expression: callee.to_string(),
+                callee_expression: Sym::from(callee.to_string()),
                 argument_shape: sg::ArgumentShape {
                     positional_count: 0,
                     named_arguments: Vec::new(),

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{ExpressionAst, ExpressionKind as AstExpressionKind};
@@ -88,7 +89,7 @@ fn emit_callable(
                     child_expression_ids: child_ids.get(&index).cloned().unwrap_or_default(),
                     symbol_id: None,
                     value_id: None,
-                    original_text: Some(expression.text.clone()),
+                    original_text: Some(Sym::from(expression.text.clone())),
                     normalized: normalized_expression(semantic, expression),
                 }),
             ),
@@ -375,14 +376,14 @@ fn parser_evidence(
 ) -> Vec<Evidence> {
     vec![Evidence {
         kind: EvidenceKind::Parser,
-        summary: summary.to_string(),
+        summary: Sym::from(summary.to_string()),
         source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(expression.source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
-            kind: expression_kind_key(expression.kind).to_string(),
-            node_key: Some(format!("expression:{}", span_key(expression.source_span))),
-            field_path: Vec::new(),
+            kind: Sym::from(expression_kind_key(expression.kind).to_string()),
+            key_prefix: Some(Sym::new("expression")),
+            field_path: Box::default(),
         }),
     }]
 }
@@ -424,8 +425,8 @@ fn expression_kind_key(kind: AstExpressionKind) -> &'static str {
 
 fn expression_sort_key(expression: &ExpressionAst) -> (usize, usize, sg::ExpressionKind, &str) {
     (
-        expression.source_span.start_byte,
-        expression.source_span.end_byte,
+        expression.source_span.start_byte as usize,
+        expression.source_span.end_byte as usize,
         expression_kind(expression.kind),
         expression.text.as_str(),
     )
@@ -442,32 +443,32 @@ fn normalized_expression(
 ) -> NormalizedExpression {
     let text = expression.text.as_str();
     let mut normalized = NormalizedExpression {
-        canonical: Some(text.to_string()),
+        canonical: Some(Sym::from(text.to_string())),
         ..NormalizedExpression::default()
     };
     match expression.kind {
-        AstExpressionKind::Identifier => normalized.identifier = Some(text.to_string()),
+        AstExpressionKind::Identifier => normalized.identifier = Some(Sym::from(text.to_string())),
         AstExpressionKind::FieldAccess => {
-            normalized.member = text.rsplit('.').next().map(str::to_string);
+            normalized.member = (text.rsplit('.').next().map(str::to_string)).map(Sym::from);
         }
-        AstExpressionKind::Assignment => normalized.operator = Some("=".to_string()),
-        AstExpressionKind::Conditional => normalized.operator = Some("if-else".to_string()),
-        AstExpressionKind::Await => normalized.operator = Some("await".to_string()),
-        AstExpressionKind::Yield => normalized.operator = Some("yield".to_string()),
+        AstExpressionKind::Assignment => normalized.operator = Some(Sym::new("=")),
+        AstExpressionKind::Conditional => normalized.operator = Some(Sym::new("if-else")),
+        AstExpressionKind::Await => normalized.operator = Some(Sym::new("await")),
+        AstExpressionKind::Yield => normalized.operator = Some(Sym::new("yield")),
         AstExpressionKind::BinaryOperator => {
-            normalized.operator = BINARY_OPERATORS
+            normalized.operator = (BINARY_OPERATORS
                 .iter()
                 .find(|operator| text.contains(**operator))
-                .map(|operator| operator.trim().to_string());
+                .map(|operator| operator.trim().to_string())).map(Sym::from);
         }
         AstExpressionKind::UnaryOperator => {
             normalized.operator = if text.starts_with("not ") {
-                Some("not".to_string())
+                Some(Sym::new("not"))
             } else {
-                text.chars()
+                (text.chars()
                     .next()
                     .filter(|first| matches!(first, '-' | '+' | '~' | '!'))
-                    .map(|first| first.to_string())
+                    .map(|first| first.to_string())).map(Sym::from)
             };
         }
         AstExpressionKind::Literal => normalized.literal = Some(literal_value(text)),
@@ -904,11 +905,11 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
-            start_row: start,
+            start_byte: start as u32,
+            end_byte: end as u32,
+            start_row: start as u32,
             start_column: 0,
-            end_row: end,
+            end_row: end as u32,
             end_column: 0,
         }
     }

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{ConditionAst, RaiseAst, ReturnAst, SourceSpan, StatementAst};
@@ -95,7 +96,7 @@ fn emit_callable(
                 cfg_node_id: entry_id,
                 callable_id,
                 role: ControlFlowNodeRole::Entry,
-                label: "entry".to_string(),
+                label: Sym::new("entry"),
                 semantic_kind: None,
             }),
         ),
@@ -113,8 +114,8 @@ fn emit_callable(
                 cfg_node_id: normal_exit_id,
                 callable_id,
                 role: ControlFlowNodeRole::Exit,
-                label: "normal exit".to_string(),
-                semantic_kind: Some("NormalExit".to_string()),
+                label: Sym::new("normal exit"),
+                semantic_kind: Some(Sym::new("NormalExit")),
             }),
         ),
     );
@@ -131,8 +132,8 @@ fn emit_callable(
                 cfg_node_id: exceptional_exit_id,
                 callable_id,
                 role: ControlFlowNodeRole::Exit,
-                label: "exceptional exit".to_string(),
-                semantic_kind: Some("ExceptionalExit".to_string()),
+                label: Sym::new("exceptional exit"),
+                semantic_kind: Some(Sym::new("ExceptionalExit")),
             }),
         ),
     );
@@ -201,8 +202,8 @@ fn cfg_node(
             cfg_node_id: node_id,
             callable_id: semantic.callable().callable_id,
             role,
-            label,
-            semantic_kind,
+            label: Sym::from(label),
+            semantic_kind: semantic_kind.map(Sym::from),
         }),
     )
 }
@@ -262,7 +263,7 @@ fn add_cfg_edge_with_metadata(
                 flow_kind,
                 outcome,
                 branch_arm,
-                precision: PRECISION.to_string(),
+                precision: Sym::from(PRECISION.to_string()),
             }),
         ),
     );
@@ -402,11 +403,11 @@ impl CfgModel {
                         expression,
                     ),
                     kind: expression.kind,
-                    label: expression
+                    label: (expression
                         .original_text
                         .clone()
                         .or_else(|| expression.normalized.canonical.clone())
-                        .unwrap_or_else(|| "expression-control".to_string()),
+                        .unwrap_or_else(|| Sym::new("expression-control"))).to_string(),
                     span,
                 });
         }
@@ -1674,8 +1675,8 @@ fn mark_normal_exits(
 
 fn statement_sort_key(statement: &StatementInfo) -> (usize, usize, usize, StatementKind, NodeId) {
     (
-        statement.span.start_byte,
-        statement.span.end_byte,
+        statement.span.start_byte as usize,
+        statement.span.end_byte as usize,
         statement.ordinal,
         statement.kind,
         statement.statement_id,
@@ -3115,7 +3116,7 @@ mod tests {
                 target,
                 flow_kind: flow.flow_kind,
                 outcome: flow.outcome,
-                branch_arm: flow.branch_arm.map(|arm| (arm.label, arm.ordinal)),
+                branch_arm: flow.branch_arm.map(|arm| (arm.label.to_string(), arm.ordinal)),
             })
             .collect()
     }
@@ -4172,13 +4173,13 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start_row: start_byte,
+            start_row: start_byte as u32,
             start_column: 0,
-            end_row: end_byte,
+            end_row: end_byte as u32,
             end_column: 0,
         }
     }

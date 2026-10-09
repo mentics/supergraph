@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::BTreeSet;
 
 use crate::analysis::enrich_supergraph_with_semantic_flows;
@@ -41,7 +42,7 @@ impl TypeScriptSupergraphAdapter {
                 evidence: vec![format!("import binding: {expression}")],
             },
             BindingTarget::Class(class_name) => {
-                if let Some(class) = context.classes.get(class_name) {
+                if let Some(class) = context.classes.get(class_name.as_str()) {
                     ResolvedCall::LocalTarget {
                         callee: class
                             .explicit_constructor_id
@@ -104,7 +105,7 @@ impl TypeScriptSupergraphAdapter {
 
         if receiver == "this" {
             if let Some(class_name) = &pending.class_qualified_name {
-                if let Some(class) = context.classes.get(class_name) {
+                if let Some(class) = context.classes.get(class_name.as_str()) {
                     if let Some(callee) = class.methods.get(member) {
                         return ResolvedCall::LocalTarget {
                             callee: callee.clone(),
@@ -415,18 +416,18 @@ fn external_target(
                 &format!("{target_kind:?}"),
             ],
         ),
-        ecosystem: package_name
+        ecosystem: Sym::from(package_name
             .as_deref()
             .map(ecosystem_for_package)
             .unwrap_or("unknown")
-            .to_string(),
-        package_name,
+            .to_string()),
+        package_name: package_name.map(Sym::from),
         package_version: None,
-        module_path,
-        qualified_name: qualified_name.to_string(),
-        member_path: member_path.map(str::to_string),
+        module_path: module_path.map(Sym::from),
+        qualified_name: Sym::from(qualified_name.to_string()),
+        member_path: (member_path.map(str::to_string)).map(Sym::from),
         target_kind,
-        source: source.to_string(),
+        source: Sym::from(source.to_string()),
     }
 }
 

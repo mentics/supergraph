@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::SourceSpan;
@@ -84,7 +85,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                     ValueRole::FormalParameter => {
                         if let (Some(callable_id), Some(name)) = (&value.callable_id, &value.name) {
                             parameter_values.insert(
-                                (callable_id.clone(), name.clone()),
+                                (callable_id.clone(), (name.clone()).to_string()),
                                 value.value_id.clone(),
                             );
                         }
@@ -100,7 +101,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                                 callable_id.clone(),
                                 (
                                     value.value_id.clone(),
-                                    name.clone(),
+                                    (name.clone()).to_string(),
                                     value.ordinal.unwrap_or_default(),
                                 ),
                             );
@@ -114,7 +115,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                                 .insert((call_site_id.clone(), ordinal), value.value_id.clone());
                             if let Some(name) = &value.name {
                                 named_argument_values.insert(
-                                    (call_site_id.clone(), name.clone()),
+                                    (call_site_id.clone(), (name.clone()).to_string()),
                                     (value.value_id.clone(), ordinal),
                                 );
                             }
@@ -634,9 +635,9 @@ fn add_parameter_in(
                 call_site_id: calls.call_site_id.clone(),
                 caller_callable_id: calls.caller_callable_id.clone(),
                 callee_callable_id: callee_id,
-                parameter_name: parameter_name.to_string(),
+                parameter_name: Sym::from(parameter_name.to_string()),
                 ordinal,
-                precision: precision.to_string(),
+                precision: Sym::from(precision.to_string()),
             }),
         ),
     );
@@ -685,7 +686,7 @@ fn parameter_out_summaries(
         else {
             continue;
         };
-        let Some(formal_value_id) = formal_values.get(&(callable_id, base_name)).cloned() else {
+        let Some(formal_value_id) = formal_values.get(&(callable_id, Sym::from(base_name))).cloned() else {
             continue;
         };
         direct_writes.insert(target_id, (formal_value_id, kind));
@@ -717,7 +718,7 @@ fn parameter_out_summaries(
         else {
             continue;
         };
-        let Some(alias_formal_id) = formal_values.get(&(callable_id, base_name)).cloned() else {
+        let Some(alias_formal_id) = formal_values.get(&(callable_id, Sym::from(base_name))).cloned() else {
             continue;
         };
         if &alias_formal_id == direct_formal_id {
@@ -1159,9 +1160,9 @@ fn add_parameter_out_summaries(
                     call_site_id: calls.call_site_id.clone(),
                     caller_callable_id: calls.caller_callable_id.clone(),
                     callee_callable_id: callee_id,
-                    parameter_name: parameter_name.to_string(),
+                    parameter_name: Sym::from(parameter_name.to_string()),
                     ordinal,
-                    precision: precision.to_string(),
+                    precision: Sym::from(precision.to_string()),
                 }),
             ),
         );
@@ -1274,7 +1275,7 @@ fn add_returns_to(
                 call_site_id: calls.call_site_id.clone(),
                 caller_callable_id: calls.caller_callable_id.clone(),
                 callee_callable_id: callee_id,
-                precision: precision.to_string(),
+                precision: Sym::from(precision.to_string()),
             }),
         ),
     );
@@ -1313,9 +1314,9 @@ fn add_throws_to(
                 caller_callable_id: calls.caller_callable_id.clone(),
                 callee_callable_id: callee_id,
                 target_kind,
-                exception_value: summary.value.clone(),
-                exception_type: summary.exception_type.clone(),
-                precision: precision.to_string(),
+                exception_value: (summary.value.clone()).map(Sym::from),
+                exception_type: (summary.exception_type.clone()).map(Sym::from),
+                precision: Sym::from(precision.to_string()),
             }),
         ),
     );
@@ -1350,7 +1351,7 @@ fn exception_summary(
         .and_then(|value| value.name.clone());
     let exception_type = value.as_deref().and_then(exception_type_from_value);
     ExceptionSummary {
-        value,
+        value: value.map(|sym| sym.to_string()),
         exception_type,
         span,
     }
@@ -1680,7 +1681,7 @@ mod tests {
             "process",
             ArgumentShape {
                 positional_count: 0,
-                named_arguments: vec!["second".to_string()],
+                named_arguments: vec![Sym::from("second".to_string())],
             },
             vec![argument_value(
                 "value:python:named:second",
@@ -2822,9 +2823,9 @@ mod tests {
         builder.add_artifact(
             sg::Artifact {
                 artifact_id: artifact_id.clone(),
-                path: path.to_string(),
-                module_path: "sample".to_string(),
-                content_hash: Some(format!("sha256:sg080:{language}")),
+                path: Sym::from(path.to_string()),
+                module_path: Sym::from("sample".to_string()),
+                content_hash: Some(Sym::from(format!("sha256:sg080:{language}"))),
             },
             Vec::new(),
         );
@@ -2835,7 +2836,7 @@ mod tests {
                 artifact_id: artifact_id.clone(),
                 kind: sg::ScopeKind::Module,
                 variant: sg::ScopeVariant::FileModule,
-                language_variant: Some(format!("{language}:module")),
+                language_variant: Some(Sym::from(format!("{language}:module"))),
                 binding_behavior: sg::ScopeBindingBehavior::Boundary,
                 owner_callable_id: None,
                 span: None,
@@ -2855,13 +2856,13 @@ mod tests {
                 Callable {
                     callable_id: callable_id.clone(),
                     kind: CallableKind::Function,
-                    name: Some(name.to_string()),
-                    qualified_name: format!("sample.{name}"),
+                    name: Some(Sym::from(name.to_string())),
+                    qualified_name: Sym::from(format!("sample.{name}")),
                     artifact_id: artifact_id.clone(),
                     declaration_span: span(10, 20),
                     body_span: Some(span(21, 80)),
                     signature: Signature {
-                        parameters,
+                        parameters: parameters.into_iter().map(Sym::from).collect(),
                         return_annotation: None,
                     },
                     scope_id: scope_id.clone(),
@@ -2955,14 +2956,14 @@ mod tests {
             evidence: Vec::new(),
             fact: NodeFact::ExternalTarget(ExternalTarget {
                 external_target_id: tid(external_target_id),
-                ecosystem: "typescript".to_string(),
-                package_name: Some("external".to_string()),
+                ecosystem: Sym::from("typescript".to_string()),
+                package_name: Some(Sym::from("external".to_string())),
                 package_version: None,
-                module_path: Some("external".to_string()),
-                qualified_name: callee_expression.to_string(),
+                module_path: Some(Sym::from("external".to_string())),
+                qualified_name: Sym::from(callee_expression.to_string()),
                 member_path: None,
                 target_kind: ExternalTargetKind::Function,
-                source: "sg080-test".to_string(),
+                source: Sym::from("sg080-test".to_string()),
             }),
         });
         graph.edges.push(call_edge(
@@ -3016,7 +3017,7 @@ mod tests {
             if let NodeFact::Callable(callable) = &mut node.fact {
                 if callable.callable_id == tid("callable:callee") {
                     callable.kind = callee_kind;
-                    callable.signature.parameters = parameters.clone();
+                    callable.signature.parameters = (parameters.clone()).into_iter().map(Sym::from).collect();
                 }
             }
         }
@@ -3156,14 +3157,14 @@ mod tests {
             evidence: Vec::new(),
             fact: NodeFact::ExternalTarget(ExternalTarget {
                 external_target_id: tid(external_target_id),
-                ecosystem: "typescript".to_string(),
-                package_name: Some("external".to_string()),
+                ecosystem: Sym::from("typescript".to_string()),
+                package_name: Some(Sym::from("external".to_string())),
                 package_version: None,
-                module_path: Some("external".to_string()),
-                qualified_name: callee_expression.to_string(),
+                module_path: Some(Sym::from("external".to_string())),
+                qualified_name: Sym::from(callee_expression.to_string()),
                 member_path: None,
                 target_kind: ExternalTargetKind::Function,
-                source: "sg081-test".to_string(),
+                source: Sym::from("sg081-test".to_string()),
             }),
         });
         graph.edges.push(call_edge_with_kind(
@@ -3229,7 +3230,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: None,
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: Some(ordinal),
             state_of_value_id: None,
             type_hint: None,
@@ -3251,7 +3252,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: None,
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: Some(ordinal),
             state_of_value_id: None,
             type_hint: None,
@@ -3273,7 +3274,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: Some(tid(call_site_id)),
-            name: name.map(str::to_string),
+            name: (name.map(str::to_string)).map(Sym::from),
             ordinal: Some(ordinal),
             state_of_value_id: None,
             type_hint: None,
@@ -3290,7 +3291,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: Some(tid(call_site_id)),
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: Some(0),
             state_of_value_id: None,
             type_hint: None,
@@ -3307,7 +3308,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: None,
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: None,
             state_of_value_id: None,
             type_hint: None,
@@ -3324,7 +3325,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: Some(tid(call_site_id)),
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: None,
             state_of_value_id: None,
             type_hint: None,
@@ -3341,7 +3342,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: None,
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: None,
             state_of_value_id: None,
             type_hint: None,
@@ -3358,7 +3359,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: Some(tid(call_site_id)),
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: None,
             state_of_value_id: None,
             type_hint: None,
@@ -3375,7 +3376,7 @@ mod tests {
             symbol_id: None,
             expression_id: None,
             call_site_id: None,
-            name: Some(name.to_string()),
+            name: Some(Sym::from(name.to_string())),
             ordinal: None,
             state_of_value_id: None,
             type_hint: None,
@@ -3534,11 +3535,11 @@ mod tests {
                     tid(call_statement_id),
                     tid(handler_statement_id),
                 ],
-                outcome_labels: vec!["try".to_string(), "exception".to_string()],
+                outcome_labels: vec![Sym::from("try".to_string()), Sym::from("exception".to_string())],
                 regions: vec![
                     sg::ControlRegion {
                         kind: ControlRegionKind::TryBody,
-                        label: "try-body".to_string(),
+                        label: Sym::from("try-body".to_string()),
                         statement_ids: vec![tid(call_statement_id)],
                         entry_statement_id: Some(tid(call_statement_id)),
                         exit_statement_id: Some(tid(call_statement_id)),
@@ -3546,7 +3547,7 @@ mod tests {
                     },
                     sg::ControlRegion {
                         kind: ControlRegionKind::CatchBody,
-                        label: "catch-body".to_string(),
+                        label: Sym::from("catch-body".to_string()),
                         statement_ids: vec![tid(handler_statement_id)],
                         entry_statement_id: Some(tid(handler_statement_id)),
                         exit_statement_id: Some(tid(handler_statement_id)),
@@ -3601,8 +3602,8 @@ mod tests {
                 cfg_node_id: tid(node_id),
                 callable_id: tid(callable_id),
                 role,
-                label: label.to_string(),
-                semantic_kind: semantic_kind.map(str::to_string),
+                label: Sym::from(label.to_string()),
+                semantic_kind: (semantic_kind.map(str::to_string)).map(Sym::from),
             }),
         });
     }
@@ -3632,7 +3633,7 @@ mod tests {
                 flow_kind: sg::ControlFlowKind::Branch,
                 outcome,
                 branch_arm: None,
-                precision: precision.to_string(),
+                precision: Sym::from(precision.to_string()),
             }),
         });
     }
@@ -3660,9 +3661,9 @@ mod tests {
             evidence: inference_evidence("SG-082 test caller use data flow"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
                 callable_id: tid("callable:caller"),
-                name: "received".to_string(),
+                name: Sym::from("received".to_string()),
                 flow_kind: DataFlowKind::DefinitionToUse,
-                precision: "sg082-test-call-result-to-caller-use".to_string(),
+                precision: Sym::from("sg082-test-call-result-to-caller-use".to_string()),
             }),
         });
     }
@@ -3684,7 +3685,7 @@ mod tests {
                 symbol_id: None,
                 expression_id: None,
                 call_site_id: Some(tid(call_site_id)),
-                name: Some(name.to_string()),
+                name: Some(Sym::from(name.to_string())),
                 ordinal: Some(ordinal),
                 state_of_value_id: Some(tid(state_of_value_id)),
                 type_hint: None,
@@ -3714,7 +3715,7 @@ mod tests {
                 symbol_id: None,
                 expression_id: None,
                 call_site_id: None,
-                name: Some(format!("rhs:{access_key}")),
+                name: Some(Sym::from(format!("rhs:{access_key}"))),
                 ordinal: None,
                 state_of_value_id: None,
                 type_hint: None,
@@ -3745,9 +3746,9 @@ mod tests {
             evidence: inference_evidence("SG-083 test callee access write"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
                 callable_id: tid("callable:callee"),
-                name: member_name.to_string(),
+                name: Sym::from(member_name.to_string()),
                 flow_kind,
-                precision: precision.to_string(),
+                precision: Sym::from(precision.to_string()),
             }),
         });
         access_value_id
@@ -3809,7 +3810,7 @@ mod tests {
                 symbol_id: None,
                 expression_id: Some(tid(&access_expression_id)),
                 call_site_id: None,
-                name: Some(member_name.to_string()),
+                name: Some(Sym::from(member_name.to_string())),
                 ordinal: None,
                 state_of_value_id: None,
                 type_hint: None,
@@ -3850,12 +3851,12 @@ mod tests {
                 child_expression_ids: child_expression_ids.iter().map(|id| tid(id)).collect(),
                 symbol_id: None,
                 value_id: value_id.map(tid),
-                original_text: original_text.map(str::to_string),
+                original_text: (original_text.map(str::to_string)).map(Sym::from),
                 normalized: sg::NormalizedExpression {
-                    canonical: original_text.map(str::to_string),
+                    canonical: (original_text.map(str::to_string)).map(Sym::from),
                     operator: None,
-                    identifier: identifier.map(str::to_string),
-                    member: member.map(str::to_string),
+                    identifier: (identifier.map(str::to_string)).map(Sym::from),
+                    member: (member.map(str::to_string)).map(Sym::from),
                     literal: None,
                 },
             }),
@@ -3877,9 +3878,9 @@ mod tests {
             evidence: inference_evidence("SG-083 test SG-073 alias summary"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
                 callable_id: tid("callable:callee"),
-                name: "value".to_string(),
+                name: Sym::from("value".to_string()),
                 flow_kind: DataFlowKind::FieldAccess,
-                precision: "sg073-possible-alias-summary".to_string(),
+                precision: Sym::from("sg073-possible-alias-summary".to_string()),
             }),
         });
     }
@@ -3921,7 +3922,7 @@ mod tests {
                 artifact_id: owner.artifact_id.clone().expect("artifact owner"),
                 enclosing_callable_id: tid("callable:caller"),
                 span: span(100, 120),
-                callee_expression: callee_expression.to_string(),
+                callee_expression: Sym::from(callee_expression.to_string()),
                 argument_shape,
                 dispatch_kind,
                 context: CallContext::Body,
@@ -4002,7 +4003,7 @@ mod tests {
                 caller_callable_id: tid("callable:caller"),
                 callee_callable_id,
                 external_target_id,
-                unresolved_target,
+                unresolved_target: unresolved_target.map(Sym::from),
                 call_site_id: tid(call_site_id),
                 kind,
                 resolution,
@@ -4338,12 +4339,12 @@ mod tests {
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {
-            start_byte: start,
-            end_byte: end,
+            start_byte: start as u32,
+            end_byte: end as u32,
             start_row: 1,
-            start_column: start,
+            start_column: start as u32,
             end_row: 1,
-            end_column: end,
+            end_column: end as u32,
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -1706,7 +1707,7 @@ pub fn path_conditions_for_behavior(
                 }),
             outcome: sg::ControlFlowOutcome::Unknown,
             branch_arm: None,
-            summary: condition_summary(graph, controls.condition_id),
+            summary: Sym::from(condition_summary(graph, controls.condition_id)),
         });
     }
 
@@ -2186,7 +2187,7 @@ mod tests {
             Confidence::Unknown,
             vec![Evidence {
                 kind: EvidenceKind::Inference,
-                summary: "s".to_string(),
+                summary: Sym::from("s".to_string()),
                 source_id: None,
                 source_span: None,
                 content_hash: None,

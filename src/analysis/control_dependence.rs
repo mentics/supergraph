@@ -1,3 +1,4 @@
+use crate::intern::Sym;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::SourceSpan;
@@ -720,7 +721,7 @@ fn add_controls_edge(
                 callable_id: semantic.callable().callable_id,
                 condition_id,
                 controlled_id,
-                precision: PRECISION.to_string(),
+                precision: Sym::from(PRECISION.to_string()),
             }),
         ),
     );
@@ -728,6 +729,7 @@ fn add_controls_edge(
 
 #[cfg(test)]
 mod tests {
+    use crate::intern::Sym;
     use std::collections::BTreeSet;
 
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
@@ -1415,14 +1417,14 @@ mod tests {
         }
     }
 
-    fn span(start_byte: usize, end_byte: usize) -> SourceSpan {
+    fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
             start_row: 0,
-            start_column: start_byte,
+            start_column: start_byte as u32,
             end_row: 0,
-            end_column: end_byte,
+            end_column: end_byte as u32,
         }
     }
 
@@ -1469,8 +1471,8 @@ mod tests {
                 cfg_node_id: test_id(node_id),
                 callable_id: callable_id(),
                 role,
-                label: node_id.to_string(),
-                semantic_kind: semantic_kind.map(str::to_string),
+                label: Sym::from(node_id.to_string()),
+                semantic_kind: (semantic_kind.map(str::to_string)).map(Sym::from),
             }),
         }
     }
@@ -1489,7 +1491,7 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: vec![sg::Evidence {
                 kind: EvidenceKind::Inference,
-                summary: "SG-060 CFG fixture".to_string(),
+                summary: Sym::from("SG-060 CFG fixture".to_string()),
                 source_id: None,
                 source_span: None,
                 content_hash: None,
@@ -1500,7 +1502,7 @@ mod tests {
                 flow_kind,
                 outcome: ControlFlowOutcome::Unknown,
                 branch_arm: None,
-                precision: "sg060-test-fixture".to_string(),
+                precision: Sym::from("sg060-test-fixture".to_string()),
             }),
         }
     }
