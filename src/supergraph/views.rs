@@ -1766,6 +1766,7 @@ pub fn diagnostic_ids_for_slice(
 ) -> Vec<NodeId> {
     let mut related_ids = value_ids.clone();
     for edge_id in edge_ids {
+        related_ids.insert(NodeId::from(*edge_id));
         if let Some(edge) = indexed_edge(graph, *edge_id) {
             related_ids.insert(edge.source_id);
             if let Some(target_id) = &edge.target_id {
@@ -2126,6 +2127,15 @@ pub fn requirements_for_edges(
 ) -> Vec<NodeId> {
     let mut requirement_ids = BTreeSet::new();
     for edge_id in edge_ids {
+        requirement_ids.extend(
+            graph
+                .indexes
+                .code_to_requirements
+                .get(&NodeId::from(*edge_id))
+                .into_iter()
+                .flatten()
+                .copied(),
+        );
         if let Some(edge) = indexed_edge(graph, *edge_id) {
             requirement_ids.extend(
                 graph
@@ -2150,4 +2160,52 @@ pub fn requirements_for_edges(
         }
     }
     requirement_ids.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::supergraph::builder::ProgramSupergraphBuilder;
+    use crate::supergraph::ids::test_support::{test_edge_id, test_id};
+    use crate::supergraph::schema::{
+        Confidence, Diagnostic, DiagnosticKind, Evidence, EvidenceKind, Severity,
+    };
+
+    fn graph_with_diagnostic_related_to(related: NodeId, diagnostic_id: NodeId) -> ProgramSupergraph {
+        let mut builder = ProgramSupergraphBuilder::new("repo", "rust");
+        builder.add_diagnostic(
+            Diagnostic {
+                diagnostic_id,
+                kind: DiagnosticKind::AliasUncertainty,
+                severity: Severity::Warning,
+                message: "m".to_string(),
+                artifact_id: None,
+                span: None,
+                related: vec![related],
+            },
+            Confidence::Unknown,
+            vec![Evidence {
+                kind: EvidenceKind::Inference,
+                summary: "s".to_string(),
+                source_id: None,
+                source_span: None,
+                content_hash: None,
+                syntax: None,
+            }],
+        );
+        builder.finish()
+    }
+
+    #[test]
+    fn diagnostic_slice_includes_diagnostics_related_to_slice_edges() {
+        let edge_id = test_edge_id("slice-edge");
+        let diagnostic_id = test_id("diagnostic:edge-related");
+        let graph = graph_with_diagnostic_related_to(NodeId::from(edge_id), diagnostic_id);
+
+        let found = diagnostic_ids_for_slice(&graph, &BTreeSet::new(), &BTreeSet::from([edge_id]));
+        assert_eq!(found, vec![diagnostic_id]);
+
+        let other = BTreeSet::from([test_edge_id("other-edge")]);
+        assert!(diagnostic_ids_for_slice(&graph, &BTreeSet::new(), &other).is_empty());
+    }
 }
