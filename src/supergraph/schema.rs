@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -7,11 +7,12 @@ use crate::ast::{CallContext, SourceSpan};
 pub const SCHEMA_VERSION: &str = "program-supergraph.v2";
 pub const DOMAIN_KNOWLEDGE_RECORD_SCHEMA_VERSION: &str = "domain-knowledge-record.v1";
 
+pub use super::ids::{EdgeId, FactId, NodeId, PayloadHash};
+use super::ids::IdSet;
+
+/// Free-form identifier used by persisted domain-knowledge records (not a graph id).
 pub type StableId = String;
 pub type SubjectId = StableId;
-pub type FactId = StableId;
-pub type NodeId = StableId;
-pub type EdgeId = StableId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramSupergraph {
@@ -34,8 +35,8 @@ pub struct ProgramSupergraph {
 pub(crate) struct IdCache {
     node_len: usize,
     edge_len: usize,
-    node_ids: HashSet<NodeId>,
-    edge_ids: HashSet<EdgeId>,
+    node_ids: IdSet<NodeId>,
+    edge_ids: IdSet<EdgeId>,
 }
 
 impl PartialEq for IdCache {
@@ -114,9 +115,9 @@ impl ProgramSupergraph {
     pub(crate) fn push_node_if_new(&mut self, node: GraphNode) -> bool {
         let cache = &mut self.id_cache;
         if cache.node_len != self.nodes.len() || cache.node_ids.len() != self.nodes.len() {
-            cache.node_ids = self.nodes.iter().map(|node| node.node_id.clone()).collect();
+            cache.node_ids = self.nodes.iter().map(|node| node.node_id).collect();
         }
-        if !cache.node_ids.insert(node.node_id.clone()) {
+        if !cache.node_ids.insert(node.node_id) {
             cache.node_len = self.nodes.len();
             return false;
         }
@@ -129,9 +130,9 @@ impl ProgramSupergraph {
     pub(crate) fn push_edge_if_new(&mut self, edge: GraphEdge) -> bool {
         let cache = &mut self.id_cache;
         if cache.edge_len != self.edges.len() || cache.edge_ids.len() != self.edges.len() {
-            cache.edge_ids = self.edges.iter().map(|edge| edge.edge_id.clone()).collect();
+            cache.edge_ids = self.edges.iter().map(|edge| edge.edge_id).collect();
         }
-        if !cache.edge_ids.insert(edge.edge_id.clone()) {
+        if !cache.edge_ids.insert(edge.edge_id) {
             cache.edge_len = self.edges.len();
             return false;
         }
@@ -145,9 +146,9 @@ impl ProgramSupergraph {
 pub struct GraphNode {
     pub node_id: NodeId,
     #[serde(default)]
-    pub fact_id: FactId,
+    pub fact_id: Option<FactId>,
     #[serde(default)]
-    pub payload_hash: String,
+    pub payload_hash: Option<PayloadHash>,
     pub kind: NodeKind,
     pub owner: SourceOwnership,
     pub span: Option<SourceSpan>,
@@ -162,9 +163,9 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub edge_id: EdgeId,
     #[serde(default)]
-    pub fact_id: FactId,
+    pub fact_id: Option<FactId>,
     #[serde(default)]
-    pub payload_hash: String,
+    pub payload_hash: Option<PayloadHash>,
     pub kind: EdgeKind,
     pub source_id: NodeId,
     pub target_id: Option<NodeId>,
@@ -402,9 +403,12 @@ pub enum BindingKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum BindingTarget {
     Callable(NodeId),
-    Class(NodeId),
-    Module(NodeId),
-    External(NodeId),
+    /// Qualified class name.
+    Class(String),
+    /// Module path.
+    Module(String),
+    /// Qualified external name.
+    External(String),
     Value(String),
     Unresolved(String),
 }
@@ -1484,7 +1488,7 @@ impl Serialize for SourceSpanIndexKey {
     {
         serializer.serialize_str(&format!(
             "{}\u{1f}{}:{}:{}:{}:{}:{}",
-            self.artifact_id.as_deref().unwrap_or(""),
+            self.artifact_id.map(|id| id.to_string()).unwrap_or_default(),
             self.span.start_byte,
             self.span.end_byte,
             self.span.start_row,
@@ -1515,7 +1519,11 @@ impl<'de> Deserialize<'de> for SourceSpanIndexKey {
         };
 
         Ok(Self {
-            artifact_id: (!artifact.is_empty()).then(|| artifact.to_string()),
+            artifact_id: if artifact.is_empty() {
+                None
+            } else {
+                Some(artifact.parse().map_err(de::Error::custom)?)
+            },
             span: SourceSpan {
                 start_byte: parse(parts[0])?,
                 end_byte: parse(parts[1])?,

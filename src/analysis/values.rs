@@ -211,7 +211,7 @@ fn emit_call_values(
         .iter()
         .filter(|call| call.context != crate::ast::CallContext::Decorator)
     {
-        let Some(call_site) = context.call_site_for(&semantic.callable().callable_id, call) else {
+        let Some(call_site) = context.call_site_for(semantic.callable().callable_id, call) else {
             continue;
         };
         let call_expression_id = expression_id_for_call(graph, index, semantic, call);
@@ -486,7 +486,7 @@ fn apply_expression_value_ids(
     expression_value_ids: BTreeMap<NodeId, NodeId>,
 ) {
     for expression_id in expression_value_ids.keys() {
-        let Some(position) = index.expression_position(expression_id) else {
+        let Some(position) = index.expression_position(*expression_id) else {
             continue;
         };
         if let NodeFact::Expression(expression) = &mut graph.nodes[position].fact {
@@ -556,7 +556,7 @@ fn apply_definition_value_ids(graph: &mut ProgramSupergraph, index: &CallableInd
         let Some(value_id) = value_id else {
             continue;
         };
-        for &position in index.positions(&callable_id) {
+        for &position in index.positions(callable_id) {
             let node = &mut graph.nodes[position];
             let NodeFact::Definition(existing) = &mut node.fact else {
                 continue;
@@ -593,7 +593,7 @@ fn apply_use_value_ids(graph: &mut ProgramSupergraph, index: &CallableIndex, sem
         else {
             continue;
         };
-        for &position in index.positions(&callable_id) {
+        for &position in index.positions(callable_id) {
             let node = &mut graph.nodes[position];
             let NodeFact::Use(existing) = &mut node.fact else {
                 continue;
@@ -819,7 +819,7 @@ fn expression_id_for_call(
     call: &CallAst,
 ) -> Option<NodeId> {
     index
-        .nodes(graph, &semantic.callable().callable_id)
+        .nodes(graph, semantic.callable().callable_id)
         .find_map(|node| match &node.fact {
             NodeFact::Expression(expression)
                 if expression.kind == ExpressionKind::Call

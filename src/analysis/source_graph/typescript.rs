@@ -6,6 +6,8 @@ use crate::supergraph::{
     BindingTarget, CallEdgeKind, CallableKind, Confidence, DispatchKind, ExternalTarget,
     ExternalTargetKind, ProgramSupergraph, stable_id,
 };
+use crate::id_parts;
+use crate::supergraph::ids::{NodeId, Tag};
 
 use super::adapter::{
     GraphContext, ImportBinding, LanguageSupergraphAdapter, PendingCall, ResolvedCall,
@@ -333,7 +335,7 @@ impl LanguageSupergraphAdapter for TypeScriptSupergraphAdapter {
     fn resolve_call(
         &self,
         pending: &PendingCall,
-        _call_site_id: &str,
+        _call_site_id: NodeId,
         context: &GraphContext,
     ) -> ResolvedCall {
         let expression = pending.call.callee.as_str();
@@ -405,9 +407,8 @@ fn external_target(
         .and_then(|module| module.split('.').next())
         .map(str::to_string);
     ExternalTarget {
-        external_target_id: stable_id(
-            "external",
-            &[
+        external_target_id: stable_id(Tag::External,
+            id_parts![
                 module_path.as_deref().unwrap_or("unknown"),
                 qualified_name,
                 member_path.unwrap_or(""),

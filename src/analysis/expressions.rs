@@ -212,7 +212,7 @@ fn expression_ids(
         .enumerate()
         .map(|(index, expression)| {
             expression_id(
-                &semantic.callable().callable_id,
+                semantic.callable().callable_id,
                 expression_kind_key(expression.kind),
                 expression.source_span,
                 ordinals[index],
@@ -262,7 +262,7 @@ fn statement_ids_for_callable(
     semantic: &SemanticCallable<'_>,
 ) -> Vec<NodeId> {
     let mut statement_id_by_span = HashMap::new();
-    for node in index.nodes(graph, &semantic.callable().callable_id) {
+    for node in index.nodes(graph, semantic.callable().callable_id) {
         if let NodeFact::Statement(statement) = &node.fact {
             statement_id_by_span
                 .entry(node.span)

@@ -6,13 +6,19 @@ use std::{
 use crate::ast::SourceSpan;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
+use super::ids::{
+    EdgeId, FactId, IdPart, PayloadHash, Tag, callable_id_from_text, with_legacy_id_text,
+};
+use crate::id_parts;
+use std::num::NonZeroU64;
+
 use super::schema::{
     Artifact, BasicBlock, Binding, Binds, CallSite, Callable, Calls, Condition, Conditions,
     Confidence, Contains, ControlFlow, Controls, DataFlow, DecomposesTo, Defines, Definition,
-    DependsOnDomainKnowledge, Diagnostic, DomainKnowledge, EdgeFact, EdgeId, EdgeKind, Evidence,
+    DependsOnDomainKnowledge, Diagnostic, DomainKnowledge, EdgeFact, EdgeKind, Evidence,
     Expression, ExternalTarget, GraphEdge, GraphIndexes, GraphNode, NodeFact, NodeId, NodeKind,
     Orders, ParameterIn, ParameterOut, ProgramSupergraph, ResolvesTo, ReturnsTo, SCHEMA_VERSION,
-    SourceOwnership, SourceSpanIndexKey, StableId, Statement, Symbol, SyntaxReference, ThrowsTo,
+    SourceOwnership, SourceSpanIndexKey, Statement, Symbol, SyntaxReference, ThrowsTo,
     TracesTo, Uncertainty, Use, Uses, Value, uncertainty_from_confidence,
     uncertainty_from_diagnostic_kind, uncertainty_from_domain_knowledge_status,
     uncertainty_from_resolution,
@@ -83,8 +89,8 @@ impl ProgramSupergraphBuilder {
         let node_id = artifact.artifact_id.clone();
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Artifact,
             owner: SourceOwnership {
                 artifact_id: Some(node_id.clone()),
@@ -115,8 +121,8 @@ impl ProgramSupergraphBuilder {
         let span = scope.span;
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Scope,
             owner,
             span,
@@ -143,8 +149,8 @@ impl ProgramSupergraphBuilder {
         let span = Some(binding.span);
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Binding,
             owner,
             span,
@@ -171,8 +177,8 @@ impl ProgramSupergraphBuilder {
         let span = Some(callable.declaration_span);
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Callable,
             owner,
             span,
@@ -207,8 +213,8 @@ impl ProgramSupergraphBuilder {
         let span = Some(call_site.span);
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::CallSite,
             owner,
             span,
@@ -229,8 +235,8 @@ impl ProgramSupergraphBuilder {
         let node_id = target.external_target_id.clone();
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::ExternalTarget,
             owner: SourceOwnership::default(),
             span: None,
@@ -437,8 +443,8 @@ impl ProgramSupergraphBuilder {
         let span = diagnostic.span;
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Diagnostic,
             owner,
             span,
@@ -457,11 +463,11 @@ impl ProgramSupergraphBuilder {
         owner: SourceOwnership,
         evidence: Vec<Evidence>,
     ) -> EdgeId {
-        let edge_id = structural_edge_id("contains", &container_id, &member_id);
+        let edge_id = structural_edge_id("contains", container_id, member_id);
         self.insert_edge(GraphEdge {
             edge_id: edge_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::Contains,
             source_id: container_id.clone(),
             target_id: Some(member_id.clone()),
@@ -485,11 +491,11 @@ impl ProgramSupergraphBuilder {
         owner: SourceOwnership,
         evidence: Vec<Evidence>,
     ) -> EdgeId {
-        let edge_id = structural_edge_id("binds", &scope_id, &binding_id);
+        let edge_id = structural_edge_id("binds", scope_id, binding_id);
         self.insert_edge(GraphEdge {
             edge_id: edge_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::Binds,
             source_id: scope_id.clone(),
             target_id: Some(binding_id.clone()),
@@ -533,11 +539,11 @@ impl ProgramSupergraphBuilder {
         confidence: Confidence,
         evidence: Vec<Evidence>,
     ) -> EdgeId {
-        let edge_id = structural_edge_id("resolves-to", &binding_id, &target_id);
+        let edge_id = structural_edge_id("resolves-to", binding_id, target_id);
         self.insert_edge(GraphEdge {
             edge_id: edge_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::ResolvesTo,
             source_id: binding_id.clone(),
             target_id: Some(target_id.clone()),
@@ -567,23 +573,21 @@ impl ProgramSupergraphBuilder {
             .callee_callable_id
             .clone()
             .or_else(|| calls.external_target_id.clone());
-        let target_key = target_id
-            .clone()
-            .or_else(|| calls.unresolved_target.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-        let edge_id = stable_id(
-            "edge",
-            &[
-                "calls",
-                &calls.caller_callable_id,
-                &calls.call_site_id,
-                &target_key,
-            ],
-        );
+        let target_part = match (&target_id, &calls.unresolved_target) {
+            (Some(target), _) => IdPart::Id(*target),
+            (None, Some(unresolved)) => IdPart::Str(unresolved),
+            (None, None) => IdPart::Str("unknown"),
+        };
+        let edge_id = stable_edge_id(&[
+            IdPart::Str("calls"),
+            IdPart::Id(calls.caller_callable_id),
+            IdPart::Id(calls.call_site_id),
+            target_part,
+        ]);
         self.insert_edge(GraphEdge {
             edge_id: edge_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::Calls,
             source_id: calls.call_site_id.clone(),
             target_id,
@@ -931,8 +935,8 @@ impl ProgramSupergraphBuilder {
     ) -> NodeId {
         self.insert_node(GraphNode {
             node_id: node_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind,
             owner,
             span,
@@ -956,11 +960,11 @@ impl ProgramSupergraphBuilder {
         evidence: Vec<Evidence>,
         fact: EdgeFact,
     ) -> EdgeId {
-        let edge_id = structural_edge_id(family, &source_id, &target_id);
+        let edge_id = structural_edge_id(family, source_id, target_id);
         self.insert_edge(GraphEdge {
             edge_id: edge_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind,
             source_id,
             target_id: Some(target_id),
@@ -1002,17 +1006,12 @@ pub fn rehydrate_program_supergraph(mut graph: ProgramSupergraph) -> ProgramSupe
     graph
 }
 
-pub fn stable_id(prefix: &str, parts: &[&str]) -> StableId {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for part in parts {
-        for byte in part.as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash ^= 0xff;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{prefix}:{hash:016x}")
+pub fn stable_id(tag: Tag, parts: &[IdPart<'_>]) -> NodeId {
+    NodeId::stable(tag, parts)
+}
+
+pub fn stable_edge_id(parts: &[IdPart<'_>]) -> EdgeId {
+    EdgeId::stable(parts)
 }
 
 struct StableHashWriter {
@@ -1037,9 +1036,9 @@ impl StableHashWriter {
         self.hash = self.hash.wrapping_mul(0x100000001b3);
     }
 
-    fn finish(&mut self, prefix: &str) -> StableId {
+    fn finish(&mut self) -> PayloadHash {
         self.finish_part();
-        format!("{prefix}:{:016x}", self.hash)
+        PayloadHash(NonZeroU64::new(self.hash).unwrap_or(NonZeroU64::MIN))
     }
 }
 
@@ -1060,45 +1059,45 @@ impl Write for StableHashWriter {
 fn stable_payload_hash_with_writer(
     payload: &impl Serialize,
     writer: &mut StableHashWriter,
-) -> StableId {
+) -> PayloadHash {
     writer.reset();
-    {
+    with_legacy_id_text(|| {
         let mut serializer = serde_json::Serializer::new(&mut *writer);
         payload
             .serialize(&mut serializer)
             .expect("identity payload serialization should not fail");
-    }
-    writer.finish("payload")
+    });
+    writer.finish()
 }
 
 pub fn artifact_id(path: &str) -> NodeId {
-    stable_id("artifact", &[path])
+    stable_id(Tag::Artifact, id_parts![path])
 }
 
-pub fn scope_id(artifact_id: &str, parts: &[&str]) -> NodeId {
+pub fn scope_id(artifact_id: NodeId, parts: &[&str]) -> NodeId {
     let mut id_parts = Vec::with_capacity(parts.len() + 1);
-    id_parts.push(artifact_id);
-    id_parts.extend_from_slice(parts);
-    stable_id("scope", &id_parts)
+    id_parts.push(IdPart::Id(artifact_id));
+    id_parts.extend(parts.iter().map(|part| IdPart::Str(part)));
+    stable_id(Tag::Scope, &id_parts)
 }
 
-pub fn binding_id(scope_id: &str, name: &str, span: SourceSpan) -> NodeId {
-    stable_id("binding", &[scope_id, name, &span_key(span)])
+pub fn binding_id(scope_id: NodeId, name: &str, span: SourceSpan) -> NodeId {
+    stable_id(Tag::Binding, id_parts![scope_id, name, &span_key(span)])
 }
 
 pub fn callable_id(qualified_name: &str) -> NodeId {
-    stable_id("callable", &[qualified_name])
+    callable_id_from_text(qualified_name)
 }
 
 pub fn call_site_id(
-    artifact_id: &str,
-    enclosing_callable_id: &str,
+    artifact_id: NodeId,
+    enclosing_callable_id: NodeId,
     callee_expression: &str,
     span: SourceSpan,
 ) -> NodeId {
     stable_id(
-        "call-site",
-        &[
+        Tag::CallSite,
+        id_parts![
             artifact_id,
             enclosing_callable_id,
             callee_expression,
@@ -1107,59 +1106,60 @@ pub fn call_site_id(
     )
 }
 
-pub fn statement_id(callable_id: &str, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
+pub fn statement_id(callable_id: NodeId, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
     stable_id(
-        "statement",
-        &[callable_id, kind, &span_key(span), &ordinal.to_string()],
+        Tag::Statement,
+        id_parts![callable_id, kind, &span_key(span), &ordinal.to_string()],
     )
 }
 
-pub fn expression_id(callable_id: &str, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
+pub fn expression_id(callable_id: NodeId, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
     stable_id(
-        "expression",
-        &[callable_id, kind, &span_key(span), &ordinal.to_string()],
+        Tag::Expression,
+        id_parts![callable_id, kind, &span_key(span), &ordinal.to_string()],
     )
 }
 
-pub fn condition_id(callable_id: &str, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
+pub fn condition_id(callable_id: NodeId, kind: &str, span: SourceSpan, ordinal: usize) -> NodeId {
     stable_id(
-        "condition",
-        &[callable_id, kind, &span_key(span), &ordinal.to_string()],
+        Tag::Condition,
+        id_parts![callable_id, kind, &span_key(span), &ordinal.to_string()],
     )
 }
 
-pub fn symbol_id(scope_id: &str, name: &str, span: Option<SourceSpan>) -> NodeId {
+pub fn symbol_id(scope_id: NodeId, name: &str, span: Option<SourceSpan>) -> NodeId {
     stable_id(
-        "symbol",
-        &[scope_id, name, &span.map(span_key).unwrap_or_default()],
+        Tag::Symbol,
+        id_parts![scope_id, name, &span.map(span_key).unwrap_or_default()],
     )
 }
 
-pub fn definition_id(callable_id: &str, name: &str, span: SourceSpan) -> NodeId {
-    stable_id("definition", &[callable_id, name, &span_key(span)])
+pub fn definition_id(callable_id: NodeId, name: &str, span: SourceSpan) -> NodeId {
+    stable_id(Tag::Definition, id_parts![callable_id, name, &span_key(span)])
 }
 
-pub fn use_id(callable_id: &str, name: &str, span: SourceSpan) -> NodeId {
-    stable_id("use", &[callable_id, name, &span_key(span)])
+pub fn use_id(callable_id: NodeId, name: &str, span: SourceSpan) -> NodeId {
+    stable_id(Tag::Use, id_parts![callable_id, name, &span_key(span)])
 }
 
-pub fn value_id(callable_id: Option<&str>, kind: &str, span: Option<SourceSpan>) -> NodeId {
+pub fn value_id(callable_id: Option<NodeId>, kind: &str, span: Option<SourceSpan>) -> NodeId {
+    let callable_part = callable_id.map_or(IdPart::Str(""), IdPart::Id);
     stable_id(
-        "value",
+        Tag::Value,
         &[
-            callable_id.unwrap_or_default(),
-            kind,
-            &span.map(span_key).unwrap_or_default(),
+            callable_part,
+            IdPart::Str(kind),
+            IdPart::Str(&span.map(span_key).unwrap_or_default()),
         ],
     )
 }
 
-pub fn basic_block_id(callable_id: &str, ordinal: usize) -> NodeId {
-    stable_id("basic-block", &[callable_id, &ordinal.to_string()])
+pub fn basic_block_id(callable_id: NodeId, ordinal: usize) -> NodeId {
+    stable_id(Tag::BasicBlock, id_parts![callable_id, &ordinal.to_string()])
 }
 
 pub fn domain_knowledge_id(scope_key: &str, summary: &str) -> NodeId {
-    stable_id("domain-knowledge", &[scope_key, summary])
+    stable_id(Tag::DomainKnowledge, id_parts![scope_key, summary])
 }
 
 pub fn external_target_id(
@@ -1168,15 +1168,15 @@ pub fn external_target_id(
     member_path: Option<&str>,
 ) -> NodeId {
     stable_id(
-        "external-target",
-        &[ecosystem, qualified_name, member_path.unwrap_or_default()],
+        Tag::ExternalTarget,
+        id_parts![ecosystem, qualified_name, member_path.unwrap_or_default()],
     )
 }
 
 pub fn diagnostic_id(message: &str, span: Option<SourceSpan>) -> NodeId {
     stable_id(
-        "diagnostic",
-        &[message, &span.map(span_key).unwrap_or_default()],
+        Tag::Diagnostic,
+        id_parts![message, &span.map(span_key).unwrap_or_default()],
     )
 }
 
@@ -1502,8 +1502,8 @@ pub fn dedup_indexes(indexes: &mut GraphIndexes) {
     dedup_index(&mut indexes.caller_to_concrete_call_targets);
 }
 
-fn structural_edge_id(kind: &str, source_id: &str, target_id: &str) -> EdgeId {
-    stable_id("edge", &[kind, source_id, target_id])
+fn structural_edge_id(kind: &str, source_id: NodeId, target_id: NodeId) -> EdgeId {
+    stable_edge_id(id_parts![kind, source_id, target_id])
 }
 
 fn span_key(span: SourceSpan) -> String {
@@ -1552,22 +1552,22 @@ pub fn refresh_fact_identity(graph: &mut ProgramSupergraph) {
         let mut payload_writer = StableHashWriter::new();
         for node in nodes {
             sort_evidence(&mut node.evidence);
-            node.payload_hash = stable_payload_hash_with_writer(
+            node.payload_hash = Some(stable_payload_hash_with_writer(
                 &NodeIdentityPayload { node },
                 &mut payload_writer,
-            );
-            node.fact_id = stable_id("fact", &[&node.node_id, &node.payload_hash]);
+            ));
+            node.fact_id = Some(FactId::stable(id_parts![node.node_id, node.payload_hash.expect("payload hash")]));
         }
     });
     par_chunks_mut(&mut graph.edges, |edges| {
         let mut payload_writer = StableHashWriter::new();
         for edge in edges {
             sort_evidence(&mut edge.evidence);
-            edge.payload_hash = stable_payload_hash_with_writer(
+            edge.payload_hash = Some(stable_payload_hash_with_writer(
                 &EdgeIdentityPayload { edge },
                 &mut payload_writer,
-            );
-            edge.fact_id = stable_id("fact", &[&edge.edge_id, &edge.payload_hash]);
+            ));
+            edge.fact_id = Some(FactId::stable(id_parts![edge.edge_id, edge.payload_hash.expect("payload hash")]));
         }
     });
 }
@@ -1769,14 +1769,14 @@ fn push_owner_edge(
     }
 }
 
-fn dedup_index<K: Ord>(index: &mut BTreeMap<K, Vec<String>>) {
+fn dedup_index<K: Ord, V: Ord>(index: &mut BTreeMap<K, Vec<V>>) {
     for values in index.values_mut() {
         values.sort();
         values.dedup();
     }
 }
 
-fn dedup_nested_index<K: Ord, L: Ord>(index: &mut BTreeMap<K, BTreeMap<L, Vec<String>>>) {
+fn dedup_nested_index<K: Ord, L: Ord, V: Ord>(index: &mut BTreeMap<K, BTreeMap<L, Vec<V>>>) {
     for nested in index.values_mut() {
         dedup_index(nested);
     }
@@ -2080,8 +2080,8 @@ mod tests {
         let diagnostic_id = diagnostic_id("unsupported construct", Some(span));
         graph.nodes.push(GraphNode {
             node_id: diagnostic_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Diagnostic,
             owner: source_owner(Some(artifact_id.clone()), None, None),
             span: Some(span),
@@ -3598,8 +3598,8 @@ mod tests {
     ) -> GraphNode {
         GraphNode {
             node_id,
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind,
             owner,
             span,
@@ -3780,8 +3780,8 @@ mod tests {
         let mut graph = builder.finish();
         graph.nodes.push(GraphNode {
             node_id: requirement_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Requirement,
             owner: source_owner(Some(artifact_id.clone()), None, None),
             span: None,
@@ -3800,8 +3800,8 @@ mod tests {
         });
         graph.edges.push(GraphEdge {
             edge_id: stable_id("edge", &["traces-to", &requirement_id, &callee_id]),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::TracesTo,
             source_id: requirement_id.clone(),
             target_id: Some(callee_id.clone()),

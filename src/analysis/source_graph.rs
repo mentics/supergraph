@@ -9,6 +9,8 @@ use crate::supergraph::{
     ProgramSupergraph, ProgramSupergraphBuilder, Resolution, Scope, ScopeBindingBehavior,
     ScopeKind, ScopeVariant, Severity, Signature, SourceOwnership, stable_id,
 };
+use crate::id_parts;
+use crate::supergraph::ids::{IdPart, NodeId, Tag, callable_id_from_text};
 
 mod adapter;
 mod python;
@@ -49,11 +51,11 @@ pub(crate) struct SourceGraphLowerer<A> {
     builder: ProgramSupergraphBuilder,
     file_contexts: BTreeMap<String, FileContext>,
     local_modules: BTreeSet<String>,
-    local_callable_ids: BTreeMap<String, String>,
+    local_callable_ids: BTreeMap<String, NodeId>,
     class_summaries: BTreeMap<String, ClassInfo>,
     short_class_names: BTreeMap<String, Vec<String>>,
     pending_calls: Vec<PendingCall>,
-    incoming_local_call_counts: BTreeMap<String, usize>,
+    incoming_local_call_counts: BTreeMap<NodeId, usize>,
 }
 
 impl<A> SourceGraphLowerer<A>
@@ -116,9 +118,10 @@ where
 
     fn lower_file(&mut self, project: &ProjectAst, file: &FileAst) {
         let module_path = self.adapter.module_path(project, &file.path);
-        let artifact_id = source_id("artifact", &[&file.path]);
-        let module_scope_id = source_id("scope", &[&artifact_id, "module"]);
-        let module_initializer_id = format!("{module_path}:<module>");
+        let artifact_id = source_id(Tag::Artifact, id_parts![&file.path]);
+        let module_scope_id = source_id(Tag::Scope, id_parts![&artifact_id, "module"]);
+        let module_initializer_id: NodeId =
+            callable_id_from_text(&format!("{module_path}:<module>"));
         let module_span = module_span(file);
 
         self.builder.add_artifact(
@@ -190,13 +193,13 @@ where
         self.builder.add_contains(
             artifact_id.clone(),
             module_scope_id.clone(),
-            owner_for_artifact(&artifact_id),
+            owner_for_artifact(artifact_id),
             vec![self.source_evidence("artifact contains module scope", Some(module_span))],
         );
         self.builder.add_contains(
             module_scope_id.clone(),
             module_initializer_id.clone(),
-            owner_for_scope(&artifact_id, &module_scope_id, Some(&module_initializer_id)),
+            owner_for_scope(artifact_id, module_scope_id, Some(module_initializer_id)),
             vec![self.source_evidence("module scope contains initializer", Some(module_span))],
         );
 
@@ -214,9 +217,9 @@ where
 
         for symbol in &file.symbols {
             match symbol.kind {
-                SymbolKind::Class => self.lower_class(file, symbol, &artifact_id, &module_path),
+                SymbolKind::Class => self.lower_class(file, symbol, artifact_id, &module_path),
                 SymbolKind::Function | SymbolKind::Method => {
-                    self.lower_function(file, symbol, &artifact_id, &module_path)
+                    self.lower_function(file, symbol, artifact_id, &module_path)
                 }
             }
         }
@@ -236,23 +239,25 @@ where
         &mut self,
         file: &FileAst,
         symbol: &SymbolAst,
-        artifact_id: &str,
+        artifact_id: NodeId,
         module_path: &str,
     ) {
         let class_name = format!("{module_path}.{}", symbol.name);
-        let class_scope_id = source_id("scope", &[artifact_id, &class_name]);
-        let implicit_constructor_id = self.adapter.implicit_constructor_id(&class_name);
+        let class_scope_id = source_id(Tag::Scope, id_parts![artifact_id, &class_name]);
+        let implicit_constructor_name = self.adapter.implicit_constructor_id(&class_name);
+        let implicit_constructor_id: NodeId =
+            callable_id_from_text(&implicit_constructor_name);
         let module_scope_id = self
             .file_contexts
             .get(&file.path)
             .map(|context| context.module_scope_id.clone())
-            .unwrap_or_else(|| source_id("scope", &[artifact_id, "module"]));
+            .unwrap_or_else(|| source_id(Tag::Scope, id_parts![artifact_id, "module"]));
 
         self.builder.add_scope(
             Scope {
                 scope_id: class_scope_id.clone(),
                 parent_scope_id: Some(module_scope_id.clone()),
-                artifact_id: artifact_id.to_string(),
+                artifact_id,
                 kind: ScopeKind::Class,
                 variant: ScopeVariant::ClassBody,
                 language_variant: None,
@@ -266,7 +271,7 @@ where
         self.builder.add_contains(
             module_scope_id.clone(),
             class_scope_id.clone(),
-            owner_for_scope(artifact_id, &module_scope_id, None),
+            owner_for_scope(artifact_id, module_scope_id, None),
             vec![self.source_evidence(
                 "module scope contains class scope",
                 Some(symbol.source_span),
@@ -291,7 +296,7 @@ where
 
         self.add_binding(
             Binding {
-                binding_id: source_id("binding", &[&module_scope_id, &symbol.name]),
+                binding_id: source_id(Tag::Binding, id_parts![&module_scope_id, &symbol.name]),
                 scope_id: module_scope_id,
                 name: symbol.name.clone(),
                 kind: BindingKind::Class,
@@ -312,8 +317,8 @@ where
                         .unwrap_or("constructor")
                         .to_string(),
                 ),
-                qualified_name: implicit_constructor_id.clone(),
-                artifact_id: artifact_id.to_string(),
+                qualified_name: implicit_constructor_name,
+                artifact_id,
                 declaration_span: symbol.source_span,
                 body_span: symbol.body_span,
                 signature: Signature {
@@ -331,7 +336,7 @@ where
         self.builder.add_contains(
             class_scope_id.clone(),
             implicit_constructor_id.clone(),
-            owner_for_scope(artifact_id, &class_scope_id, Some(&implicit_constructor_id)),
+            owner_for_scope(artifact_id, class_scope_id, Some(implicit_constructor_id)),
             vec![self.source_evidence(
                 "class scope contains implicit constructor",
                 Some(symbol.source_span),
@@ -343,18 +348,19 @@ where
         &mut self,
         file: &FileAst,
         symbol: &SymbolAst,
-        artifact_id: &str,
+        artifact_id: NodeId,
         module_path: &str,
     ) {
         let qualified_name = symbol_qualified_name(module_path, symbol);
         // Rust symbol ids carry an impl disambiguator when several impls define
         // the same method on one type; keep their callables distinct.
-        let callable_id = match symbol.id.split_once(crate::parser::rust::IMPL_MARKER) {
+        let callable_id_text = match symbol.id.split_once(crate::parser::rust::IMPL_MARKER) {
             Some((_, disambiguator)) => {
                 format!("{qualified_name}{}{disambiguator}", crate::parser::rust::IMPL_MARKER)
             }
             None => qualified_name.clone(),
         };
+        let callable_id: NodeId = callable_id_from_text(&callable_id_text);
         let parent_scope_id = symbol
             .parent
             .as_ref()
@@ -365,14 +371,14 @@ where
                     .get(&file.path)
                     .map(|context| context.module_scope_id.clone())
             });
-        let scope_id = source_id("scope", &[artifact_id, &qualified_name]);
+        let scope_id = source_id(Tag::Scope, id_parts![artifact_id, &qualified_name]);
         let scope_span = symbol.body_span.or(Some(symbol.source_span));
 
         self.builder.add_scope(
             Scope {
                 scope_id: scope_id.clone(),
                 parent_scope_id: parent_scope_id.clone(),
-                artifact_id: artifact_id.to_string(),
+                artifact_id,
                 kind: ScopeKind::Function,
                 variant: ScopeVariant::FunctionBody,
                 language_variant: None,
@@ -388,7 +394,7 @@ where
             self.builder.add_contains(
                 parent_scope_id.clone(),
                 scope_id.clone(),
-                owner_for_scope(artifact_id, parent_scope_id, Some(&callable_id)),
+                owner_for_scope(artifact_id, *parent_scope_id, Some(callable_id)),
                 vec![self.source_evidence("parent scope contains callable scope", scope_span)],
             );
         }
@@ -408,7 +414,7 @@ where
             if let Some(class_scope_id) = parent_scope_id.as_ref() {
                 self.add_binding(
                     Binding {
-                        binding_id: source_id("binding", &[class_scope_id, &symbol.name]),
+                        binding_id: source_id(Tag::Binding, id_parts![class_scope_id, &symbol.name]),
                         scope_id: class_scope_id.clone(),
                         name: symbol.name.clone(),
                         kind: BindingKind::Method,
@@ -422,7 +428,7 @@ where
         } else if let Some(module_scope_id) = parent_scope_id.as_ref() {
             self.add_binding(
                 Binding {
-                    binding_id: source_id("binding", &[module_scope_id, &symbol.name]),
+                    binding_id: source_id(Tag::Binding, id_parts![module_scope_id, &symbol.name]),
                     scope_id: module_scope_id.clone(),
                     name: symbol.name.clone(),
                     kind: BindingKind::Function,
@@ -437,7 +443,7 @@ where
         for parameter in &symbol.parameters {
             self.add_binding(
                 Binding {
-                    binding_id: source_id("binding", &[&scope_id, &parameter.name]),
+                    binding_id: source_id(Tag::Binding, id_parts![&scope_id, &parameter.name]),
                     scope_id: scope_id.clone(),
                     name: parameter.name.clone(),
                     kind: BindingKind::Parameter,
@@ -452,7 +458,7 @@ where
         for assignment in &symbol.assignments {
             self.add_binding(
                 Binding {
-                    binding_id: source_id("binding", &[&scope_id, &assignment.target]),
+                    binding_id: source_id(Tag::Binding, id_parts![&scope_id, &assignment.target]),
                     scope_id: scope_id.clone(),
                     name: assignment.target.clone(),
                     kind: BindingKind::Assignment,
@@ -477,7 +483,7 @@ where
                 kind: self.adapter.callable_kind(symbol),
                 name: Some(symbol.name.clone()),
                 qualified_name,
-                artifact_id: artifact_id.to_string(),
+                artifact_id,
                 declaration_span: symbol.source_span,
                 body_span: symbol.body_span,
                 signature: Signature {
@@ -503,7 +509,7 @@ where
         self.builder.add_contains(
             scope_id.clone(),
             callable_id.clone(),
-            owner_for_scope(artifact_id, &scope_id, Some(&callable_id)),
+            owner_for_scope(artifact_id, scope_id, Some(callable_id)),
             vec![
                 self.source_evidence("callable scope contains callable", Some(symbol.source_span)),
             ],
@@ -511,7 +517,7 @@ where
 
         for call in &symbol.calls {
             self.pending_calls.push(PendingCall {
-                artifact_id: artifact_id.to_string(),
+                artifact_id,
                 module_path: module_path.to_string(),
                 caller_callable_id: callable_id.clone(),
                 class_qualified_name: symbol
@@ -576,9 +582,8 @@ where
                     }
                     self.add_binding(
                         Binding {
-                            binding_id: source_id(
-                                "binding",
-                                &[&context.module_scope_id, &local_name],
+                            binding_id: source_id(Tag::Binding,
+                                id_parts![&context.module_scope_id, &local_name],
                             ),
                             scope_id: context.module_scope_id.clone(),
                             name: local_name,
@@ -586,7 +591,7 @@ where
                             target,
                             span: import.source_span,
                         },
-                        &context.artifact_id,
+                        context.artifact_id,
                         Confidence::Exact,
                     );
                 }
@@ -633,7 +638,7 @@ where
             self.builder.add_contains(
                 pending_call.caller_callable_id.clone(),
                 call_site_id.clone(),
-                owner_for_callable(&pending_call.artifact_id, &pending_call.caller_callable_id),
+                owner_for_callable(pending_call.artifact_id, pending_call.caller_callable_id),
                 vec![
                     self.source_evidence(
                         "call site ownership",
@@ -645,7 +650,7 @@ where
             let resolved = {
                 let graph_context = self.graph_context();
                 self.adapter
-                    .resolve_call(&pending_call, &call_site_id, &graph_context)
+                    .resolve_call(&pending_call, call_site_id, &graph_context)
             };
             match resolved {
                 ResolvedCall::LocalTarget {
@@ -714,9 +719,8 @@ where
 
     fn call_site(&self, pending: &PendingCall) -> CallSite {
         CallSite {
-            call_site_id: source_id(
-                "call-site",
-                &[
+            call_site_id: source_id(Tag::CallSite,
+                id_parts![
                     &pending.artifact_id,
                     &pending.caller_callable_id,
                     &pending.call.source_span.start_byte.to_string(),
@@ -737,12 +741,12 @@ where
     fn add_calls(
         &mut self,
         pending: &PendingCall,
-        call_site_id: String,
+        call_site_id: NodeId,
         kind: CallEdgeKind,
         resolution: Resolution,
         confidence: Confidence,
-        callee_callable_id: Option<String>,
-        external_target_id: Option<String>,
+        callee_callable_id: Option<NodeId>,
+        external_target_id: Option<NodeId>,
         unresolved_target: Option<String>,
         evidence: Vec<String>,
     ) {
@@ -762,7 +766,7 @@ where
                 kind,
                 resolution,
             },
-            owner_for_callable(&pending.artifact_id, &pending.caller_callable_id),
+            owner_for_callable(pending.artifact_id, pending.caller_callable_id),
             Some(pending.call.source_span),
             confidence,
             self.evidence_strings(&evidence, Some(pending.call.source_span)),
@@ -792,7 +796,7 @@ where
         });
     }
 
-    fn add_binding(&mut self, binding: Binding, artifact_id: &str, confidence: Confidence) {
+    fn add_binding(&mut self, binding: Binding, artifact_id: NodeId, confidence: Confidence) {
         let binding_id = binding.binding_id.clone();
         let scope_id = binding.scope_id.clone();
         let span = binding.span;
@@ -806,7 +810,7 @@ where
         self.builder.add_binds(
             scope_id.clone(),
             binding_id.clone(),
-            owner_for_scope(artifact_id, &scope_id, None),
+            owner_for_scope(artifact_id, scope_id, None),
             vec![self.source_evidence("scope binds source binding", Some(span))],
         );
 
@@ -815,7 +819,7 @@ where
                 binding_id,
                 target_id,
                 resolution,
-                owner_for_scope(artifact_id, &scope_id, None),
+                owner_for_scope(artifact_id, scope_id, None),
                 confidence,
                 vec![self.resolver_evidence("binding target", Some(span))],
             );
@@ -876,13 +880,13 @@ where
         kind: DiagnosticKind,
         severity: Severity,
         message: String,
-        artifact_id: Option<String>,
+        artifact_id: Option<NodeId>,
         span: Option<SourceSpan>,
-        related: Vec<String>,
+        related: Vec<NodeId>,
     ) {
         self.builder.add_diagnostic(
             Diagnostic {
-                diagnostic_id: source_id("diagnostic", &[&message, &format!("{span:?}")]),
+                diagnostic_id: source_id(Tag::Diagnostic, id_parts![&message, &format!("{span:?}")]),
                 kind,
                 severity,
                 message,
@@ -895,11 +899,12 @@ where
         );
     }
 
-    fn binding_target_node_id(&self, target: &BindingTarget) -> Option<String> {
+    fn binding_target_node_id(&self, target: &BindingTarget) -> Option<NodeId> {
         match target {
-            BindingTarget::Callable(target_id) | BindingTarget::External(target_id) => {
-                Some(target_id.clone())
-            }
+            BindingTarget::Callable(target_id) => Some(*target_id),
+            // External bindings only carry a qualified name; there is no node to point at, so
+            // the edge targets a synthetic external-target id derived from that name.
+            BindingTarget::External(name) => Some(external_binding_target_id(name)),
             BindingTarget::Module(module_path) => self
                 .file_contexts
                 .values()
@@ -928,7 +933,7 @@ where
 pub(crate) struct SourceGraphContext<'a> {
     pub files: &'a BTreeMap<String, FileContext>,
     pub local_modules: &'a BTreeSet<String>,
-    pub local_callable_ids: &'a BTreeMap<String, String>,
+    pub local_callable_ids: &'a BTreeMap<String, NodeId>,
     pub class_summaries: &'a BTreeMap<String, ClassInfo>,
     pub short_class_names: &'a BTreeMap<String, Vec<String>>,
     pub pending_calls: &'a [PendingCall],
@@ -974,35 +979,39 @@ fn join_spans(left: SourceSpan, right: SourceSpan) -> SourceSpan {
     }
 }
 
-fn source_id(prefix: &str, parts: &[&str]) -> String {
-    stable_id(prefix, parts)
+fn source_id(tag: Tag, parts: &[IdPart<'_>]) -> NodeId {
+    stable_id(tag, parts)
 }
 
-fn owner_for_artifact(artifact_id: &str) -> SourceOwnership {
+fn external_binding_target_id(name: &str) -> NodeId {
+    crate::supergraph::ids::external_name_id(name)
+}
+
+fn owner_for_artifact(artifact_id: NodeId) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(artifact_id.to_string()),
+        artifact_id: Some(artifact_id),
         scope_id: None,
         callable_id: None,
     }
 }
 
 fn owner_for_scope(
-    artifact_id: &str,
-    scope_id: &str,
-    callable_id: Option<&str>,
+    artifact_id: NodeId,
+    scope_id: NodeId,
+    callable_id: Option<NodeId>,
 ) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(artifact_id.to_string()),
-        scope_id: Some(scope_id.to_string()),
-        callable_id: callable_id.map(str::to_string),
+        artifact_id: Some(artifact_id),
+        scope_id: Some(scope_id),
+        callable_id,
     }
 }
 
-fn owner_for_callable(artifact_id: &str, callable_id: &str) -> SourceOwnership {
+fn owner_for_callable(artifact_id: NodeId, callable_id: NodeId) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(artifact_id.to_string()),
+        artifact_id: Some(artifact_id),
         scope_id: None,
-        callable_id: Some(callable_id.to_string()),
+        callable_id: Some(callable_id),
     }
 }
 
@@ -1075,7 +1084,7 @@ mod tests {
             _confidence: Confidence,
         ) -> ExternalTarget {
             ExternalTarget {
-                external_target_id: source_id("external", &[qualified_name]),
+                external_target_id: source_id(Tag::External, id_parts![qualified_name]),
                 ecosystem: "test".to_string(),
                 package_name: None,
                 package_version: None,

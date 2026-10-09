@@ -298,7 +298,7 @@ impl CfgModel {
             .map(|statement| (statement.source_span, statement))
             .collect::<BTreeMap<_, _>>();
         let mut statements = index
-            .nodes(graph, &semantic.callable().callable_id)
+            .nodes(graph, semantic.callable().callable_id)
             .filter_map(|node| match &node.fact {
                 NodeFact::Statement(statement) => {
                     let span = node.span?;
@@ -342,7 +342,7 @@ impl CfgModel {
             .collect::<BTreeMap<_, _>>();
         let mut conditions_by_statement = BTreeMap::new();
         let mut exception_conditions_by_statement = BTreeMap::new();
-        for node in index.nodes(graph, &semantic.callable().callable_id) {
+        for node in index.nodes(graph, semantic.callable().callable_id) {
             let NodeFact::Condition(condition) = &node.fact else {
                 continue;
             };
@@ -374,7 +374,7 @@ impl CfgModel {
 
         let mut expression_controls_by_statement =
             BTreeMap::<NodeId, Vec<ExpressionControlInfo>>::new();
-        for node in index.nodes(graph, &semantic.callable().callable_id) {
+        for node in index.nodes(graph, semantic.callable().callable_id) {
             let NodeFact::Expression(expression) = &node.fact else {
                 continue;
             };

@@ -502,7 +502,7 @@ fn emit_declarations(
             )
             .unwrap_or_else(|| {
                 let binding = BindingInfo {
-                    binding_id: sg::binding_id(&scope_id, &definition.name, definition.source_span),
+                    binding_id: sg::binding_id(scope_id, &definition.name, definition.source_span),
                     scope_id: scope_id.clone(),
                     name: definition.name.clone(),
                     kind: binding_kind,
@@ -614,7 +614,7 @@ fn emit_static_receiver_fields(
             .filter(|binding| binding.kind == BindingKind::Field)
             .unwrap_or_else(|| {
                 let binding = BindingInfo {
-                    binding_id: sg::binding_id(&class_scope_id, &field.field, field.source_span),
+                    binding_id: sg::binding_id(class_scope_id, &field.field, field.source_span),
                     scope_id: class_scope_id.clone(),
                     name: field.field.clone(),
                     kind: BindingKind::Field,
@@ -659,8 +659,8 @@ fn emit_static_receiver_fields(
             graph_edge(
                 edge_id(
                     "uses",
-                    &semantic.callable().callable_id,
-                    &use_id,
+                    semantic.callable().callable_id,
+                    use_id,
                     &field.field,
                 ),
                 EdgeKind::Uses,
@@ -713,7 +713,7 @@ fn insert_binding(graph: &mut ProgramSupergraph, tables: &mut LexicalTables, bin
     insert_edge(
         graph,
         graph_edge(
-            edge_id("binds", &binding.scope_id, &binding.binding_id, PRECISION),
+            edge_id("binds", binding.scope_id, binding.binding_id, PRECISION),
             EdgeKind::Binds,
             binding.scope_id.clone(),
             binding.binding_id.clone(),
@@ -738,7 +738,7 @@ fn ensure_symbol_for_binding(
     if let Some(symbol_id) = tables.symbols_by_binding.get(&binding.binding_id) {
         return symbol_id.clone();
     }
-    let symbol_id = sg::symbol_id(&binding.scope_id, &binding.name, Some(binding.span));
+    let symbol_id = sg::symbol_id(binding.scope_id, &binding.name, Some(binding.span));
     tables
         .symbols_by_id
         .entry(symbol_id.clone())
@@ -876,7 +876,7 @@ fn emit_definition_node(
     insert_edge(
         graph,
         graph_edge(
-            edge_id("defines", &source_id, &definition_id, &definition.name),
+            edge_id("defines", source_id, definition_id, &definition.name),
             EdgeKind::Defines,
             source_id,
             definition_id.clone(),
@@ -925,7 +925,7 @@ fn add_uses_edge(
     insert_edge(
         graph,
         graph_edge(
-            edge_id("uses", &source_id, use_id, &use_fact.name),
+            edge_id("uses", source_id, use_id, &use_fact.name),
             EdgeKind::Uses,
             source_id,
             use_id.to_string(),
@@ -958,7 +958,7 @@ fn add_binding_resolves_to(
     insert_edge(
         graph,
         graph_edge(
-            edge_id("resolves-to", &binding.binding_id, &target_id, PRECISION),
+            edge_id("resolves-to", binding.binding_id, target_id, PRECISION),
             EdgeKind::ResolvesTo,
             binding.binding_id.clone(),
             target_id.clone(),
@@ -1460,7 +1460,7 @@ fn containing_call_site_id(
         .calls()
         .iter()
         .filter(|call| span_contains(call.source_span, span))
-        .filter_map(|call| context.call_site_for(&semantic.callable().callable_id, call))
+        .filter_map(|call| context.call_site_for(semantic.callable().callable_id, call))
         .map(|call_site| call_site.call_site_id.clone())
         .next()
 }

@@ -4,11 +4,13 @@
 //! (`prefix:hex16`) is only produced by `Display`/serde; in memory an id is 8 bytes
 //! (typed ids) or 16 bytes ([`NodeId`], which also carries a [`Tag`]).
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::num::NonZeroU64;
 use std::str::FromStr;
+use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -72,9 +74,20 @@ impl IdHasher {
 
     /// Hashes another id as its textual form, so the result equals hashing `id.to_string()`.
     pub fn part_id(&mut self, id: NodeId) {
+        if let Some(name) = legacy_text(id) {
+            self.part_str(name);
+            return;
+        }
         self.write_bytes(id.tag.prefix().as_bytes());
         self.write_bytes(b":");
         self.write_bytes(&hex16(id.hash.get()));
+        self.finish_part();
+    }
+
+    pub fn part_prefixed(&mut self, prefix: &str, hash: u64) {
+        self.write_bytes(prefix.as_bytes());
+        self.write_bytes(b":");
+        self.write_bytes(&hex16(hash));
         self.finish_part();
     }
 
@@ -89,6 +102,8 @@ impl IdHasher {
 pub enum IdPart<'a> {
     Str(&'a str),
     Id(NodeId),
+    /// An id of a non-node kind (`edge`, `fact`, `payload`), hashed as its `prefix:hex16` text.
+    Prefixed(&'static str, u64),
     /// Hashed as its decimal text, matching `n.to_string()`.
     U64(u64),
 }
@@ -105,6 +120,18 @@ impl<'a> From<&'a String> for IdPart<'a> {
     }
 }
 
+impl<'a> From<&'a NodeId> for IdPart<'a> {
+    fn from(value: &'a NodeId) -> Self {
+        IdPart::Id(*value)
+    }
+}
+
+impl<'a> From<&&'a str> for IdPart<'a> {
+    fn from(value: &&'a str) -> Self {
+        IdPart::Str(value)
+    }
+}
+
 impl From<NodeId> for IdPart<'_> {
     fn from(value: NodeId) -> Self {
         IdPart::Id(value)
@@ -117,12 +144,99 @@ impl From<u64> for IdPart<'_> {
     }
 }
 
+/// Builds a `&[IdPart]` from heterogeneous parts (`&str`, `&String`, ids, `u64`).
+#[macro_export]
+macro_rules! id_parts {
+    ($($part:expr),* $(,)?) => {
+        &[$($crate::supergraph::ids::IdPart::from($part)),*]
+    };
+}
+
+// ---- Legacy identity text ----------------------------------------------------------------
+//
+// Callable ids and ids of external names used to be readable names (`pkg.mod.func`,
+// `anyhow.Context`); they are now hashes. Every other id derived from such an id hashed that
+// name, and so did every payload hash. To keep all derived ids and payload hashes bit-identical
+// to the pre-refactor output (so the refactor can be verified against golden output), these ids
+// remember the text they were created from and hashing / payload serialization substitute it.
+// This table can be dropped when output-changing hash simplifications are made.
+
+type LegacyKey = (Tag, u64);
+
+fn legacy_names() -> &'static RwLock<IdMap<LegacyKey, &'static str>> {
+    static NAMES: OnceLock<RwLock<IdMap<LegacyKey, &'static str>>> = OnceLock::new();
+    NAMES.get_or_init(|| RwLock::new(IdMap::default()))
+}
+
+fn legacy_text(id: NodeId) -> Option<&'static str> {
+    if !matches!(id.tag, Tag::Callable | Tag::ExternalTarget) {
+        return None;
+    }
+    legacy_names()
+        .read()
+        .expect("legacy names")
+        .get(&(id.tag, id.hash.get()))
+        .copied()
+}
+
+/// Creates an id of `tag` from legacy identity text (a qualified name) and remembers the text.
+pub fn id_from_legacy_text(tag: Tag, text: &str) -> NodeId {
+    let id = NodeId::stable(tag, &[IdPart::Str(text)]);
+    let key = (tag, id.hash.get());
+    let names = legacy_names();
+    if !names.read().expect("legacy names").contains_key(&key) {
+        names
+            .write()
+            .expect("legacy names")
+            .entry(key)
+            .or_insert_with(|| Box::leak(text.to_string().into_boxed_str()));
+    }
+    id
+}
+
+/// Id of a callable from its legacy identity text (its qualified name, or
+/// `"{module_path}:<module>"` for a module initializer).
+pub fn callable_id_from_text(text: &str) -> NodeId {
+    id_from_legacy_text(Tag::Callable, text)
+}
+
+/// Id of an external name (`anyhow.Context`), as used by import bindings.
+pub fn external_name_id(text: &str) -> NodeId {
+    id_from_legacy_text(Tag::ExternalTarget, text)
+}
+
+/// Orders two ids like their pre-refactor string forms: ids of named callables / external names
+/// compare by their legacy text, all other ids by `prefix:hex16` (which is `NodeId::cmp`).
+pub fn legacy_cmp(left: &NodeId, right: &NodeId) -> std::cmp::Ordering {
+    match (legacy_text(*left), legacy_text(*right)) {
+        (None, None) => left.cmp(right),
+        (l, r) => {
+            let l = l.map_or_else(|| left.to_string(), str::to_string);
+            let r = r.map_or_else(|| right.to_string(), str::to_string);
+            l.cmp(&r)
+        }
+    }
+}
+
+thread_local! {
+    static LEGACY_SERIALIZE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `work` with legacy-text ids serializing as their legacy identity text (payload hashing).
+pub fn with_legacy_id_text<R>(work: impl FnOnce() -> R) -> R {
+    let previous = LEGACY_SERIALIZE.with(|flag| flag.replace(true));
+    let result = work();
+    LEGACY_SERIALIZE.with(|flag| flag.set(previous));
+    result
+}
+
 pub fn hash_parts(parts: &[IdPart<'_>]) -> NonZeroU64 {
     let mut hasher = IdHasher::new();
     for part in parts {
         match *part {
             IdPart::Str(text) => hasher.part_str(text),
             IdPart::Id(id) => hasher.part_id(id),
+            IdPart::Prefixed(prefix, hash) => hasher.part_prefixed(prefix, hash),
             IdPart::U64(value) => hasher.part_str(&value.to_string()),
         }
     }
@@ -151,6 +265,9 @@ fn parse_hash(text: &str) -> Result<NonZeroU64, ParseIdError> {
 macro_rules! tags {
     ($($variant:ident => $prefix:literal),+ $(,)?) => {
         /// Kind of a node id; distinguishes ids in heterogeneous positions.
+        ///
+        /// Variants are declared in the order of their `prefix:` text so that `Ord` on [`NodeId`]
+        /// matches the historical string ordering of ids.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[repr(u8)]
         pub enum Tag {
@@ -178,31 +295,38 @@ macro_rules! tags {
 
 tags! {
     Artifact => "artifact",
-    Scope => "scope",
+    BasicBlock => "basic-block",
     Binding => "binding",
-    Callable => "callable",
     CallSite => "call-site",
-    ExternalTarget => "external-target",
-    Statement => "statement",
-    Expression => "expression",
+    Callable => "callable",
+    CfgNode => "cfg-node",
     Condition => "condition",
-    Symbol => "symbol",
     Definition => "definition",
+    DataFlowNode => "df-node",
+    Diagnostic => "diagnostic",
+    DomainKnowledge => "domain-knowledge",
+    Expression => "expression",
+    ExternalTarget => "external-target",
+    External => "external",
+    Requirement => "requirement",
+    Scope => "scope",
+    Statement => "statement",
+    Symbol => "symbol",
     Use => "use",
     Value => "value",
-    BasicBlock => "basic-block",
-    DomainKnowledge => "domain-knowledge",
-    CfgNode => "cfg-node",
-    DataFlowNode => "df-node",
-    Requirement => "requirement",
-    Diagnostic => "diagnostic",
 }
 
 /// Id for a position that can hold any kind of node. 16 bytes; `Option<NodeId>` is also 16.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeId {
     pub tag: Tag,
     pub hash: NonZeroU64,
+}
+
+impl std::hash::Hash for NodeId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash.get());
+    }
 }
 
 impl NodeId {
@@ -236,6 +360,11 @@ impl FromStr for NodeId {
 
 impl Serialize for NodeId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if LEGACY_SERIALIZE.with(Cell::get) {
+            if let Some(text) = legacy_text(*self) {
+                return serializer.serialize_str(text);
+            }
+        }
         serializer.collect_str(self)
     }
 }
@@ -308,6 +437,18 @@ macro_rules! typed_id {
 macro_rules! node_typed_id {
     ($(#[$meta:meta])* $name:ident, $tag:ident, $prefix:literal) => {
         typed_id!($(#[$meta])* $name, $prefix);
+
+        impl From<$name> for IdPart<'_> {
+            fn from(id: $name) -> Self {
+                IdPart::Id(NodeId::from(id))
+            }
+        }
+
+        impl<'a> From<&'a $name> for IdPart<'a> {
+            fn from(id: &'a $name) -> Self {
+                IdPart::Id(NodeId::from(*id))
+            }
+        }
 
         impl From<$name> for NodeId {
             fn from(id: $name) -> NodeId {
@@ -391,6 +532,45 @@ typed_id!(
     PayloadHash,
     "payload"
 );
+
+macro_rules! prefixed_part {
+    ($($name:ident),+) => {$(
+        impl From<$name> for IdPart<'_> {
+            fn from(id: $name) -> Self {
+                IdPart::Prefixed($name::PREFIX, id.0.get())
+            }
+        }
+
+        impl From<&$name> for IdPart<'_> {
+            fn from(id: &$name) -> Self {
+                IdPart::Prefixed($name::PREFIX, id.0.get())
+            }
+        }
+    )+};
+}
+
+prefixed_part!(EdgeId, FactId, PayloadHash);
+
+/// Id helpers for unit tests, which used to use readable strings such as `"caller"` as ids.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    /// A deterministic node id derived from a readable name (tag: artifact).
+    pub fn test_id(name: &str) -> NodeId {
+        NodeId::stable(Tag::Artifact, &[IdPart::Str(name)])
+    }
+
+    /// A deterministic node id of the given kind derived from a readable name.
+    pub fn test_id_of(tag: Tag, name: &str) -> NodeId {
+        NodeId::stable(tag, &[IdPart::Str(name)])
+    }
+
+    /// A deterministic edge id derived from a readable name.
+    pub fn test_edge_id(name: &str) -> EdgeId {
+        EdgeId::stable(&[IdPart::Str(name)])
+    }
+}
 
 /// Ids are already uniformly distributed hashes; hashing them again is wasted work.
 #[derive(Default, Clone, Copy)]

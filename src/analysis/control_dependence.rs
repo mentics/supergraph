@@ -489,7 +489,7 @@ fn branch_condition_ids(
     analysis: &CallableDominance,
 ) -> BTreeSet<NodeId> {
     index
-        .nodes(graph, &analysis.cfg.callable_id)
+        .nodes(graph, analysis.cfg.callable_id)
         .filter_map(|node| match &node.fact {
             NodeFact::ControlFlow(control)
                 if control.role == ControlFlowNodeRole::Condition

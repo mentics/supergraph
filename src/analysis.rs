@@ -17,8 +17,8 @@ use crate::{
     timing,
     supergraph::{
         self as sg, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind, GraphEdge, GraphNode,
-        NodeFact, NodeId, NodeKind, ProgramSupergraph, SourceOwnership, build_indexes,
-        refresh_fact_identity, refresh_provenance, refresh_uncertainty, sort_graph, stable_id,
+        EdgeId, NodeFact, NodeId, NodeKind, ProgramSupergraph, SourceOwnership, build_indexes,
+        refresh_fact_identity, refresh_provenance, refresh_uncertainty, sort_graph,
         uncertainty_from_confidence,
     },
 };
@@ -224,12 +224,14 @@ impl<'a> SemanticContext<'a> {
     fn new(graph: &ProgramSupergraph, project: &'a ProjectAst) -> Self {
         let mut artifacts_by_path = BTreeMap::new();
         let mut artifacts_by_module = BTreeMap::new();
+        let mut module_paths_by_artifact = BTreeMap::new();
         let mut callables = Vec::new();
         let mut call_sites_by_key = BTreeMap::new();
 
         for node in &graph.nodes {
             match &node.fact {
                 NodeFact::Artifact(artifact) => {
+                    module_paths_by_artifact.insert(artifact.artifact_id, artifact.module_path.clone());
                     artifacts_by_module.insert(artifact.module_path.clone(), artifact.clone());
                     artifacts_by_path.insert(artifact.path.clone(), artifact.clone());
                 }
@@ -244,7 +246,10 @@ impl<'a> SemanticContext<'a> {
         let mut callables_by_owner = BTreeMap::new();
         for callable in callables {
             if callable.kind == sg::CallableKind::ModuleInitializer {
-                callables_by_owner.insert(callable.callable_id.clone(), callable.clone());
+                if let Some(module_path) = module_paths_by_artifact.get(&callable.artifact_id) {
+                    callables_by_owner
+                        .insert(format!("{module_path}:<module>"), callable.clone());
+                }
             }
             for artifact in artifacts_by_module.values() {
                 let module_path = &artifact.module_path;
@@ -317,7 +322,7 @@ impl<'a> SemanticContext<'a> {
         callables
     }
 
-    pub(crate) fn call_site_for(&self, callable_id: &str, call: &CallAst) -> Option<&sg::CallSite> {
+    pub(crate) fn call_site_for(&self, callable_id: NodeId, call: &CallAst) -> Option<&sg::CallSite> {
         self.call_sites_by_key.get(&format!(
             "{}|{}|{}",
             callable_id,
@@ -440,11 +445,11 @@ pub fn insert_edge(graph: &mut ProgramSupergraph, edge: GraphEdge) {
     graph.push_edge_if_new(edge);
 }
 
-pub(crate) fn owner(artifact_id: &str, callable_id: &str) -> SourceOwnership {
+pub(crate) fn owner(artifact_id: NodeId, callable_id: NodeId) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(artifact_id.to_string()),
+        artifact_id: Some(artifact_id),
         scope_id: None,
-        callable_id: Some(callable_id.to_string()),
+        callable_id: Some(callable_id),
     }
 }
 
@@ -475,14 +480,26 @@ pub(crate) fn span_contains(outer: SourceSpan, inner: SourceSpan) -> bool {
     outer.start_byte <= inner.start_byte && inner.end_byte <= outer.end_byte
 }
 
-pub fn edge_id(kind: &str, source_id: &str, target_id: &str, precision_key: &str) -> NodeId {
-    stable_id("edge", &[kind, source_id, target_id, precision_key])
+/// Id of a derived edge. `source` and `target` are usually [`NodeId`]s but may be text
+/// (for example the name of an unresolved call target).
+pub fn edge_id<'a>(
+    kind: &str,
+    source: impl Into<sg::ids::IdPart<'a>>,
+    target: impl Into<sg::ids::IdPart<'a>>,
+    precision_key: &str,
+) -> EdgeId {
+    sg::stable_edge_id(&[
+        sg::ids::IdPart::Str(kind),
+        source.into(),
+        target.into(),
+        sg::ids::IdPart::Str(precision_key),
+    ])
 }
 
 pub(crate) fn node_owner(semantic: &SemanticCallable<'_>) -> SourceOwnership {
     owner(
-        &semantic.artifact().artifact_id,
-        &semantic.callable().callable_id,
+        semantic.artifact().artifact_id,
+        semantic.callable().callable_id,
     )
 }
 
@@ -497,8 +514,8 @@ pub(crate) fn graph_node(
 ) -> GraphNode {
     GraphNode {
         node_id,
-        fact_id: String::new(),
-        payload_hash: String::new(),
+        fact_id: None,
+        payload_hash: None,
         kind,
         owner,
         span,
@@ -510,7 +527,7 @@ pub(crate) fn graph_node(
 }
 
 pub(crate) fn graph_edge(
-    edge_id: NodeId,
+    edge_id: EdgeId,
     kind: EdgeKind,
     source_id: NodeId,
     target_id: NodeId,
@@ -522,8 +539,8 @@ pub(crate) fn graph_edge(
 ) -> GraphEdge {
     GraphEdge {
         edge_id,
-        fact_id: String::new(),
-        payload_hash: String::new(),
+        fact_id: None,
+        payload_hash: None,
         kind,
         source_id,
         target_id: Some(target_id),

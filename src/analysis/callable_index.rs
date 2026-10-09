@@ -1,8 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     ast::SourceSpan,
-    supergraph::{BindingKind, EdgeFact, GraphEdge, GraphNode, NodeFact, NodeId, ProgramSupergraph},
+    supergraph::{
+        BindingKind, EdgeFact, GraphEdge, GraphNode, NodeFact, NodeId, ProgramSupergraph,
+        ids::{IdMap, IdSet},
+    },
 };
 
 /// Snapshot index over a graph that replaces whole-graph scans with per-callable lookups.
@@ -13,17 +16,17 @@ use crate::{
 #[derive(Debug, Default)]
 pub(crate) struct CallableIndex {
     nodes_seen: usize,
-    position_by_id: HashMap<String, usize>,
+    position_by_id: IdMap<NodeId, usize>,
     edges_seen: usize,
-    expression_positions: HashMap<String, usize>,
-    parameter_binding_spans: HashMap<(String, String), SourceSpan>,
-    nodes_by_callable: HashMap<String, Vec<usize>>,
-    control_flow_edges_by_callable: HashMap<String, Vec<usize>>,
-    node_position_by_cfg_id: HashMap<String, usize>,
-    expression_spans: HashMap<String, SourceSpan>,
-    definition_values: HashMap<(String, String, SourceSpan), NodeId>,
-    use_values: HashMap<(String, String, SourceSpan), NodeId>,
-    value_ids: HashSet<NodeId>,
+    expression_positions: IdMap<NodeId, usize>,
+    parameter_binding_spans: HashMap<(NodeId, String), SourceSpan>,
+    nodes_by_callable: IdMap<NodeId, Vec<usize>>,
+    control_flow_edges_by_callable: IdMap<NodeId, Vec<usize>>,
+    node_position_by_cfg_id: IdMap<NodeId, usize>,
+    expression_spans: IdMap<NodeId, SourceSpan>,
+    definition_values: HashMap<(NodeId, String, SourceSpan), NodeId>,
+    use_values: HashMap<(NodeId, String, SourceSpan), NodeId>,
+    value_ids: IdSet<NodeId>,
 }
 
 impl CallableIndex {
@@ -56,7 +59,7 @@ impl CallableIndex {
             .or_insert(position);
         if let Some(callable_id) = callable_id_of(&node.fact) {
             self.nodes_by_callable
-                .entry(callable_id.to_string())
+                .entry(callable_id)
                 .or_default()
                 .push(position);
         }
@@ -107,29 +110,29 @@ impl CallableIndex {
     }
 
     /// Positions in `graph.nodes` of the nodes owned by `callable_id`, in graph order.
-    pub(crate) fn positions(&self, callable_id: &str) -> &[usize] {
+    pub(crate) fn positions(&self, callable_id: NodeId) -> &[usize] {
         self.nodes_by_callable
-            .get(callable_id)
+            .get(&callable_id)
             .map(Vec::as_slice)
             .unwrap_or_default()
     }
 
     /// Position in `graph.nodes` of the first node with `node_id`.
-    pub(crate) fn node_position(&self, node_id: &str) -> Option<usize> {
-        self.position_by_id.get(node_id).copied()
+    pub(crate) fn node_position(&self, node_id: NodeId) -> Option<usize> {
+        self.position_by_id.get(&node_id).copied()
     }
 
-    pub(crate) fn expression_position(&self, expression_id: &str) -> Option<usize> {
-        self.expression_positions.get(expression_id).copied()
+    pub(crate) fn expression_position(&self, expression_id: NodeId) -> Option<usize> {
+        self.expression_positions.get(&expression_id).copied()
     }
 
     pub(crate) fn parameter_binding_span(
         &self,
-        scope_id: &str,
+        scope_id: NodeId,
         parameter_name: &str,
     ) -> Option<SourceSpan> {
         self.parameter_binding_spans
-            .get(&(scope_id.to_string(), parameter_name.to_string()))
+            .get(&(scope_id, parameter_name.to_string()))
             .copied()
     }
 
@@ -137,10 +140,10 @@ impl CallableIndex {
     pub(crate) fn nodes<'g>(
         &self,
         graph: &'g ProgramSupergraph,
-        callable_id: &str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'g GraphNode> {
         self.nodes_by_callable
-            .get(callable_id)
+            .get(&callable_id)
             .into_iter()
             .flatten()
             .map(|position| &graph.nodes[*position])
@@ -150,10 +153,10 @@ impl CallableIndex {
     pub(crate) fn control_flow_edges<'g>(
         &self,
         graph: &'g ProgramSupergraph,
-        callable_id: &str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'g GraphEdge> {
         self.control_flow_edges_by_callable
-            .get(callable_id)
+            .get(&callable_id)
             .into_iter()
             .flatten()
             .map(|position| &graph.edges[*position])
@@ -162,55 +165,55 @@ impl CallableIndex {
     pub(crate) fn control_flow_node<'g>(
         &self,
         graph: &'g ProgramSupergraph,
-        cfg_node_id: &str,
+        cfg_node_id: NodeId,
     ) -> Option<&'g GraphNode> {
         self.node_position_by_cfg_id
-            .get(cfg_node_id)
+            .get(&cfg_node_id)
             .map(|position| &graph.nodes[*position])
     }
 
-    pub(crate) fn expression_span(&self, expression_id: &str) -> Option<SourceSpan> {
-        self.expression_spans.get(expression_id).copied()
+    pub(crate) fn expression_span(&self, expression_id: NodeId) -> Option<SourceSpan> {
+        self.expression_spans.get(&expression_id).copied()
     }
 
     pub(crate) fn definition_value_id(
         &self,
-        callable_id: &str,
+        callable_id: NodeId,
         name: &str,
         span: SourceSpan,
     ) -> Option<NodeId> {
         self.definition_values
-            .get(&(callable_id.to_string(), name.to_string(), span))
+            .get(&(callable_id, name.to_string(), span))
             .cloned()
     }
 
     pub(crate) fn use_value_id(
         &self,
-        callable_id: &str,
+        callable_id: NodeId,
         name: &str,
         span: SourceSpan,
     ) -> Option<NodeId> {
         self.use_values
-            .get(&(callable_id.to_string(), name.to_string(), span))
+            .get(&(callable_id, name.to_string(), span))
             .cloned()
     }
 
-    pub(crate) fn has_value(&self, value_id: &str) -> bool {
-        self.value_ids.contains(value_id)
+    pub(crate) fn has_value(&self, value_id: NodeId) -> bool {
+        self.value_ids.contains(&value_id)
     }
 }
 
-fn callable_id_of(fact: &NodeFact) -> Option<&str> {
+fn callable_id_of(fact: &NodeFact) -> Option<NodeId> {
     match fact {
-        NodeFact::CallSite(fact) => Some(&fact.enclosing_callable_id),
-        NodeFact::Statement(fact) => Some(&fact.callable_id),
-        NodeFact::Expression(fact) => Some(&fact.callable_id),
-        NodeFact::Condition(fact) => Some(&fact.callable_id),
-        NodeFact::Definition(fact) => Some(&fact.callable_id),
-        NodeFact::Use(fact) => Some(&fact.callable_id),
-        NodeFact::Value(fact) => fact.callable_id.as_deref(),
-        NodeFact::ControlFlow(fact) => Some(&fact.callable_id),
-        NodeFact::DataFlow(fact) => Some(&fact.callable_id),
+        NodeFact::CallSite(fact) => Some(fact.enclosing_callable_id),
+        NodeFact::Statement(fact) => Some(fact.callable_id),
+        NodeFact::Expression(fact) => Some(fact.callable_id),
+        NodeFact::Condition(fact) => Some(fact.callable_id),
+        NodeFact::Definition(fact) => Some(fact.callable_id),
+        NodeFact::Use(fact) => Some(fact.callable_id),
+        NodeFact::Value(fact) => fact.callable_id,
+        NodeFact::ControlFlow(fact) => Some(fact.callable_id),
+        NodeFact::DataFlow(fact) => Some(fact.callable_id),
         _ => None,
     }
 }

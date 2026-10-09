@@ -55,7 +55,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
             GraphEdge {
                 edge_id: edge_id(
                     "calls",
-                    &call_site.call_site_id,
+                    call_site.call_site_id,
                     &target_key,
                     &format!("{PRECISION}:{:?}", resolves_to.resolution),
                 ),

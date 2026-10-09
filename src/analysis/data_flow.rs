@@ -145,7 +145,7 @@ fn add_defines_edge(
     insert_edge(
         graph,
         graph_edge(
-            edge_id("defines", &source_id, definition_id, &definition.name),
+            edge_id("defines", source_id, definition_id, &definition.name),
             EdgeKind::Defines,
             source_id,
             definition_id.to_string(),
@@ -175,7 +175,7 @@ fn add_uses_edge(
     insert_edge(
         graph,
         graph_edge(
-            edge_id("uses", &source_id, use_id, &use_fact.name),
+            edge_id("uses", source_id, use_id, &use_fact.name),
             EdgeKind::Uses,
             source_id,
             use_id.to_string(),
@@ -272,7 +272,7 @@ fn emit_value_instance_flows(
                 target_id,
                 expression_value_name(expression),
                 flow_kind,
-                index.expression_span(&expression.expression_id),
+                index.expression_span(expression.expression_id),
                 precision,
                 confidence,
             );
@@ -652,7 +652,7 @@ fn access_expressions_by_span(
         })
         .filter_map(|expression| {
             Some((
-                index.expression_span(&expression.expression_id)?,
+                index.expression_span(expression.expression_id)?,
                 expression,
             ))
         })
@@ -675,7 +675,7 @@ fn assignment_targets(
                 ExpressionKind::FieldAccess | ExpressionKind::IndexAccess
             )
         })
-        .filter(|target| index.expression_span(&target.expression_id).is_some())
+        .filter(|target| index.expression_span(target.expression_id).is_some())
         .map(|target| target.expression_id.clone())
         .collect()
 }
@@ -1510,7 +1510,7 @@ fn expressions_for_callable(
     expressions.sort_by_key(|expression| {
         (
             index
-                .expression_span(&expression.expression_id)
+                .expression_span(expression.expression_id)
                 .map(|span| span.start_byte)
                 .unwrap_or(usize::MAX),
             expression.ordinal,
@@ -1667,7 +1667,7 @@ fn containing_call_site_id(
         .filter(|call| span_contains(call.source_span, span))
         .find_map(|call| {
             context
-                .call_site_for(&semantic.callable().callable_id, call)
+                .call_site_for(semantic.callable().callable_id, call)
                 .map(|call_site| call_site.call_site_id.clone())
         })
 }

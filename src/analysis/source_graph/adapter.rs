@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{AssignmentAst, CallAst, CallContext, FileAst, ProjectAst, SymbolAst, SymbolKind};
+use crate::supergraph::ids::NodeId;
 use crate::supergraph::{
     BindingTarget, CallEdgeKind, CallableKind, Confidence, DispatchKind, ExternalTarget,
     ExternalTargetKind,
@@ -9,10 +10,10 @@ use crate::supergraph::{
 #[derive(Debug, Clone)]
 pub(crate) struct ClassInfo {
     pub qualified_name: String,
-    pub scope_id: String,
-    pub explicit_constructor_id: Option<String>,
-    pub implicit_constructor_id: String,
-    pub methods: BTreeMap<String, String>,
+    pub scope_id: NodeId,
+    pub explicit_constructor_id: Option<NodeId>,
+    pub implicit_constructor_id: NodeId,
+    pub methods: BTreeMap<String, NodeId>,
     pub fields: BTreeMap<String, String>,
 }
 
@@ -25,9 +26,9 @@ pub(crate) struct ImportBinding {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileContext {
-    pub artifact_id: String,
+    pub artifact_id: NodeId,
     pub module_path: String,
-    pub module_scope_id: String,
+    pub module_scope_id: NodeId,
     pub imports: BTreeMap<String, ImportBinding>,
     pub assignments: BTreeMap<String, String>,
     pub external_assignments: BTreeMap<String, String>,
@@ -35,9 +36,9 @@ pub(crate) struct FileContext {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingCall {
-    pub artifact_id: String,
+    pub artifact_id: NodeId,
     pub module_path: String,
-    pub caller_callable_id: String,
+    pub caller_callable_id: NodeId,
     pub class_qualified_name: Option<String>,
     pub call: CallAst,
 }
@@ -45,7 +46,7 @@ pub(crate) struct PendingCall {
 #[derive(Debug, Clone)]
 pub(crate) enum ResolvedCall {
     LocalTarget {
-        callee: String,
+        callee: NodeId,
         kind: CallEdgeKind,
         evidence: Vec<String>,
     },
@@ -64,7 +65,7 @@ pub(crate) enum ResolvedCall {
 pub(crate) struct GraphContext<'a> {
     pub files: &'a BTreeMap<String, FileContext>,
     pub local_modules: &'a BTreeSet<String>,
-    pub local_callables: &'a BTreeMap<String, String>,
+    pub local_callables: &'a BTreeMap<String, NodeId>,
     pub classes: &'a BTreeMap<String, ClassInfo>,
     pub short_classes: &'a BTreeMap<String, Vec<String>>,
 }
@@ -76,10 +77,10 @@ impl GraphContext<'_> {
             .find(|context| context.module_path == module_path)
     }
 
-    pub fn resolve_direct_local(&self, module_path: &str, name: &str) -> Option<String> {
+    pub fn resolve_direct_local(&self, module_path: &str, name: &str) -> Option<NodeId> {
         self.local_callables
             .get(&format!("{module_path}.{name}"))
-            .cloned()
+            .copied()
     }
 
     pub fn resolve_class_name(&self, module_path: &str, name: &str) -> Option<&ClassInfo> {
@@ -167,7 +168,7 @@ pub(crate) trait LanguageSupergraphAdapter {
     ) -> BindingTarget {
         let qualified = format!("{module}.{name}");
         if let Some(callable) = context.local_callables.get(&qualified) {
-            BindingTarget::Callable(callable.clone())
+            BindingTarget::Callable(*callable)
         } else if context.classes.contains_key(&qualified) {
             BindingTarget::Class(qualified)
         } else if context.local_modules.contains(module) {
@@ -222,7 +223,7 @@ pub(crate) trait LanguageSupergraphAdapter {
     fn resolve_call(
         &self,
         pending: &PendingCall,
-        call_site_id: &str,
+        call_site_id: NodeId,
         context: &GraphContext,
     ) -> ResolvedCall;
 }
@@ -231,7 +232,7 @@ pub(crate) struct FieldFlowContext<'a> {
     pub classes: &'a mut BTreeMap<String, ClassInfo>,
     pub files: &'a BTreeMap<String, FileContext>,
     pub local_modules: &'a BTreeSet<String>,
-    pub local_callables: &'a BTreeMap<String, String>,
+    pub local_callables: &'a BTreeMap<String, NodeId>,
     pub short_classes: &'a BTreeMap<String, Vec<String>>,
 }
 

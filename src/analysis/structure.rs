@@ -324,7 +324,7 @@ fn add_condition_contains_edges(
                         parser_evidence(
                             semantic,
                             index
-                                .node_position(member_id)
+                                .node_position(*member_id)
                                 .and_then(|position| graph.nodes[position].span)
                                 .unwrap_or_default(),
                             "structured-region",
@@ -351,7 +351,7 @@ fn statements_for_callable(
         text_by_span.entry(ast.source_span).or_insert(&ast.text);
     }
     index
-        .nodes(graph, &semantic.callable().callable_id)
+        .nodes(graph, semantic.callable().callable_id)
         .filter_map(|node| match &node.fact {
             NodeFact::Statement(statement) => Some(StatementInfo {
                 statement_id: statement.statement_id.clone(),
@@ -395,7 +395,7 @@ fn expression_id_for_condition(
     condition_span: SourceSpan,
 ) -> Option<NodeId> {
     index
-        .nodes(graph, &semantic.callable().callable_id)
+        .nodes(graph, semantic.callable().callable_id)
         .filter_map(|node| match &node.fact {
             NodeFact::Expression(expression) => Some((node, expression)),
             _ => None,

@@ -1462,7 +1462,7 @@ fn caller_handler_for_call_site(
         call_site.span,
     )?;
     index
-        .nodes(graph, &call_site.enclosing_callable_id)
+        .nodes(graph, call_site.enclosing_callable_id)
         .find_map(|node| {
             let NodeFact::Condition(condition) = &node.fact else {
                 return None;
