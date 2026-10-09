@@ -14,6 +14,7 @@ use crate::{
         rust::{filter_file as filter_rust_file, parse_rust_file},
         typescript::{filter_file as filter_typescript_file, parse_typescript_file},
     },
+    timing,
     supergraph::{
         self as sg, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind, GraphEdge, GraphNode,
         NodeFact, NodeId, NodeKind, ProgramSupergraph, SourceOwnership, build_indexes,
@@ -37,6 +38,32 @@ pub mod structure;
 pub mod symbols;
 pub mod values;
 
+/// Applies `work` to every item on scoped threads and returns the results in input order.
+/// The first error in input order is returned, matching a sequential loop.
+fn parallel_map<T: Sync, R: Send>(
+    items: &[T],
+    work: impl Fn(&T) -> Result<R> + Sync,
+) -> Result<Vec<R>> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let chunk_size = items.len().div_ceil(threads).max(1);
+    let work = &work;
+    let chunks = std::thread::scope(|scope| {
+        let handles = items
+            .chunks(chunk_size)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(work).collect::<Result<Vec<R>>>()))
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("parse worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut results = Vec::with_capacity(items.len());
+    for chunk in chunks {
+        results.extend(chunk?);
+    }
+    Ok(results)
+}
+
 pub fn analyze_python_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
     let path = path.as_ref();
     let root = path
@@ -51,20 +78,20 @@ pub fn analyze_python_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
                 .unwrap_or_else(|| root.display().to_string()),
         }]
     } else {
-        discover_python_files(&root)?
+        timing::stage("discover files", || discover_python_files(&root))?
     };
 
-    let mut parsed_files = Vec::with_capacity(files.len());
-    for file in files {
-        let parsed =
-            parse_python_file(&file.absolute_path, file.relative_path).with_context(|| {
-                format!(
-                    "failed to parse Python source {}",
-                    file.absolute_path.display()
-                )
+    let parsed_files = timing::stage("parse + extract AST (parallel)", || {
+        parallel_map(&files, |file| {
+            let parsed = timing::add_cpu("  tree-sitter parse", || {
+                parse_python_file(&file.absolute_path, file.relative_path.clone())
+            })
+            .with_context(|| {
+                format!("failed to parse Python source {}", file.absolute_path.display())
             })?;
-        parsed_files.push(filter_python_file(&parsed));
-    }
+            Ok(timing::add_cpu("  AST extraction", || filter_python_file(&parsed)))
+        })
+    })?;
 
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
@@ -90,16 +117,20 @@ pub fn analyze_rust_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
                 .unwrap_or_else(|| root.display().to_string()),
         }]
     } else {
-        discover_rust_files(&root)?
+        timing::stage("discover files", || discover_rust_files(&root))?
     };
 
-    let mut parsed_files = Vec::with_capacity(files.len());
-    for file in files {
-        let parsed = parse_rust_file(&file.absolute_path, file.relative_path).with_context(|| {
-            format!("failed to parse Rust source {}", file.absolute_path.display())
-        })?;
-        parsed_files.push(filter_rust_file(&parsed));
-    }
+    let parsed_files = timing::stage("parse + extract AST (parallel)", || {
+        parallel_map(&files, |file| {
+            let parsed = timing::add_cpu("  tree-sitter parse", || {
+                parse_rust_file(&file.absolute_path, file.relative_path.clone())
+            })
+            .with_context(|| {
+                format!("failed to parse Rust source {}", file.absolute_path.display())
+            })?;
+            Ok(timing::add_cpu("  AST extraction", || filter_rust_file(&parsed)))
+        })
+    })?;
 
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
@@ -125,20 +156,20 @@ pub fn analyze_typescript_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
                 .unwrap_or_else(|| root.display().to_string()),
         }]
     } else {
-        discover_typescript_files(&root)?
+        timing::stage("discover files", || discover_typescript_files(&root))?
     };
 
-    let mut parsed_files = Vec::with_capacity(files.len());
-    for file in files {
-        let parsed =
-            parse_typescript_file(&file.absolute_path, file.relative_path).with_context(|| {
-                format!(
-                    "failed to parse TypeScript source {}",
-                    file.absolute_path.display()
-                )
+    let parsed_files = timing::stage("parse + extract AST (parallel)", || {
+        parallel_map(&files, |file| {
+            let parsed = timing::add_cpu("  tree-sitter parse", || {
+                parse_typescript_file(&file.absolute_path, file.relative_path.clone())
+            })
+            .with_context(|| {
+                format!("failed to parse TypeScript source {}", file.absolute_path.display())
             })?;
-        parsed_files.push(filter_typescript_file(&parsed));
-    }
+            Ok(timing::add_cpu("  AST extraction", || filter_typescript_file(&parsed)))
+        })
+    })?;
 
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
@@ -162,23 +193,23 @@ pub fn enrich_supergraph_with_semantic_flows(
     mut graph: ProgramSupergraph,
     project: &ProjectAst,
 ) -> ProgramSupergraph {
-    let context = SemanticContext::new(&graph, project);
-    statements::emit(&mut graph, &context);
-    expressions::emit(&mut graph, &context);
-    structure::emit(&mut graph, &context);
-    scopes::emit(&mut graph, &context);
-    symbols::emit(&mut graph, &context);
-    calls::emit(&mut graph);
-    values::emit(&mut graph, &context);
-    cfg::emit(&mut graph, &context);
-    data_flow::emit(&mut graph, &context);
-    control_dependence::emit(&mut graph, &context);
-    interprocedural::emit(&mut graph);
-    refresh_uncertainty(&mut graph);
-    refresh_provenance(&mut graph);
-    refresh_fact_identity(&mut graph);
-    sort_graph(&mut graph);
-    graph.indexes = build_indexes(&graph.nodes, &graph.edges);
+    let context = timing::stage("semantic context", || SemanticContext::new(&graph, project));
+    timing::stage("pass: statements", || statements::emit(&mut graph, &context));
+    timing::stage("pass: expressions", || expressions::emit(&mut graph, &context));
+    timing::stage("pass: structure", || structure::emit(&mut graph, &context));
+    timing::stage("pass: scopes", || scopes::emit(&mut graph, &context));
+    timing::stage("pass: symbols", || symbols::emit(&mut graph, &context));
+    timing::stage("pass: calls", || calls::emit(&mut graph));
+    timing::stage("pass: values", || values::emit(&mut graph, &context));
+    timing::stage("pass: cfg", || cfg::emit(&mut graph, &context));
+    timing::stage("pass: data flow", || data_flow::emit(&mut graph, &context));
+    timing::stage("pass: control dependence", || control_dependence::emit(&mut graph, &context));
+    timing::stage("pass: interprocedural", || interprocedural::emit(&mut graph));
+    timing::stage("pass: refresh uncertainty", || refresh_uncertainty(&mut graph));
+    timing::stage("pass: refresh provenance", || refresh_provenance(&mut graph));
+    timing::stage("pass: fact identity hashes", || refresh_fact_identity(&mut graph));
+    timing::stage("pass: sort graph", || sort_graph(&mut graph));
+    graph.indexes = timing::stage("build indexes", || build_indexes(&graph.nodes, &graph.edges));
     graph
 }
 

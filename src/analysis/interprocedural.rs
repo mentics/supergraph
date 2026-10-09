@@ -796,8 +796,7 @@ fn actual_argument_count(
     call_site_id: &str,
 ) -> usize {
     call_argument_values
-        .keys()
-        .filter(|(candidate_call_site_id, _)| candidate_call_site_id == call_site_id)
+        .range((call_site_id.to_string(), 0)..=(call_site_id.to_string(), usize::MAX))
         .count()
 }
 

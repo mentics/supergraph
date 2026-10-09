@@ -3,6 +3,7 @@ pub mod ast;
 mod fs;
 mod parser;
 pub mod supergraph;
+pub mod timing;
 
 pub use analysis::{
     analyze_python_path, analyze_python_supergraph, analyze_rust_path, analyze_rust_supergraph,

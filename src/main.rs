@@ -43,6 +43,9 @@ enum Command {
         /// Pretty-print the JSON.
         #[arg(long)]
         pretty: bool,
+        /// Print a per-stage time breakdown to stderr.
+        #[arg(long)]
+        timings: bool,
     },
     /// Dump the per-file project AST (JSON) without building the supergraph.
     Ast {
@@ -58,13 +61,21 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Build { language, path, output, pretty } => {
+        Command::Build { language, path, output, pretty, timings } => {
+            if timings {
+                supergraph::timing::enable();
+            }
             let graph = match language {
                 Language::Python => analyze_python_supergraph(&path)?,
                 Language::Rust => analyze_rust_supergraph(&path)?,
                 Language::Typescript => analyze_typescript_supergraph(&path)?,
             };
-            let r = emit_graph(&graph, output, pretty);
+            let r = supergraph::timing::stage("serialize + write", || {
+                emit_graph(&graph, output, pretty)
+            });
+            if timings {
+                eprintln!("{}", supergraph::timing::report());
+            }
             // The process is about to exit; skip freeing the (very large) graph.
             std::mem::forget(graph);
             r

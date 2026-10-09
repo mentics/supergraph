@@ -46,10 +46,6 @@ fn parse_rust_tree(relative_path: String, source: String) -> Result<ParsedRustFi
     let tree = parser
         .parse(&source, None)
         .ok_or_else(|| anyhow!("Tree-sitter failed to parse {}", relative_path))?;
-    if tree.root_node().has_error() {
-        return Err(anyhow!("Tree-sitter parse errors in {}", relative_path));
-    }
-
     Ok(ParsedRustFile {
         relative_path,
         source,
@@ -117,6 +113,7 @@ pub fn filter_file(parsed: &ParsedRustFile) -> FileAst {
         raises: facts.raises,
         field_accesses: facts.field_accesses,
         index_accesses: facts.index_accesses,
+        parse_errors: super::collect_parse_errors(root, &parsed.source),
     }
 }
 
@@ -1096,9 +1093,23 @@ fn any_first_named_child(node: Node) -> Option<Node> {
         .find(|child| !is_comment(*child))
 }
 
+/// Named children of `node`. Children inside an `ERROR` node are lifted into the result so
+/// the well-formed constructs around a syntax error are still extracted.
 fn named_children(node: Node) -> Vec<Node> {
+    let mut children = Vec::new();
+    push_named_children(node, &mut children);
+    children
+}
+
+fn push_named_children<'tree>(node: Node<'tree>, children: &mut Vec<Node<'tree>>) {
     let mut cursor = node.walk();
-    node.named_children(&mut cursor).collect()
+    for child in node.named_children(&mut cursor) {
+        if child.is_error() {
+            push_named_children(child, children);
+        } else {
+            children.push(child);
+        }
+    }
 }
 
 fn visit_named_descendants(node: Node, visitor: &mut impl FnMut(Node)) {

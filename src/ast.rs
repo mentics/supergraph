@@ -22,6 +22,25 @@ pub struct FileAst {
     pub raises: Vec<RaiseAst>,
     pub field_accesses: Vec<FieldAccessAst>,
     pub index_accesses: Vec<IndexAccessAst>,
+    /// Regions Tree-sitter could not parse; the rest of the file is still extracted.
+    #[serde(default)]
+    pub parse_errors: Vec<ParseErrorAst>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParseErrorKind {
+    /// Source text the grammar could not match.
+    Unparseable,
+    /// A token the grammar expected but the source omitted.
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseErrorAst {
+    pub kind: ParseErrorKind,
+    pub message: String,
+    pub text: String,
+    pub source_span: SourceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
