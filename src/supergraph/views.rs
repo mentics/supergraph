@@ -1,10 +1,5 @@
 use crate::intern::Sym;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt::Write as _,
-};
-
-use serde::Serialize;
+use std::collections::BTreeSet;
 
 use crate::ast::SourceSpan;
 
@@ -12,7 +7,7 @@ use super::invalidation;
 use super::schema::{
     self as sg, CallEdgeKind, Confidence, ControlFlowNodeRole, DataFlowNodeRole, EdgeFact,
     EdgeKind, ExternalTarget, GraphEdge, GraphNode, NodeFact, NodeId, NodeKind, ProgramSupergraph,
-    Requirement, RequirementKind, SourceSpanIndexKey,
+    Requirement, SourceSpanIndexKey,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1255,7 +1250,7 @@ impl<'a> SystemDependenceGraphView<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SdgTraversalDirection {
+pub enum SdgTraversalDirection {
     Forward,
     Backward,
     Both,
@@ -2208,5 +2203,38 @@ mod tests {
 
         let other = BTreeSet::from([test_edge_id("other-edge")]);
         assert!(diagnostic_ids_for_slice(&graph, &BTreeSet::new(), &other).is_empty());
+    }
+
+    #[test]
+    fn requirements_for_edges_finds_requirements_traced_to_the_edge_itself() {
+        let edge_id = test_edge_id("traced-edge");
+        let requirement_id = test_id("requirement:edge-trace");
+        let mut builder = ProgramSupergraphBuilder::new("repo", "rust");
+        builder.add_traces_to(
+            sg::TracesTo {
+                requirement_id,
+                code_fact_id: NodeId::from(edge_id),
+                precision: Sym::new("edge-trace"),
+            },
+            sg::SourceOwnership::default(),
+            None,
+            Confidence::Exact,
+            vec![Evidence {
+                kind: EvidenceKind::Inference,
+                summary: Sym::from("s".to_string()),
+                source_id: None,
+                source_span: None,
+                content_hash: None,
+                syntax: None,
+            }],
+        );
+        let graph = builder.finish();
+
+        assert_eq!(
+            requirements_for_edges(&graph, &BTreeSet::from([edge_id])),
+            vec![requirement_id]
+        );
+        let other = BTreeSet::from([test_edge_id("other-edge")]);
+        assert!(requirements_for_edges(&graph, &other).is_empty());
     }
 }

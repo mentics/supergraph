@@ -55,6 +55,10 @@ fn emit_region_scopes(graph: &mut ProgramSupergraph) {
     let callable_by_id = callable_artifacts(graph);
     let statement_spans = statement_spans(graph);
     let mut planned = Vec::new();
+    // Regions of one construct can cover the same span (a loop body and its continuation).
+    // Two scopes with an identical span would make "innermost scope" depend on id order and
+    // split bindings from their uses, so only the first region per span gets a scope.
+    let mut seen_region_spans = std::collections::BTreeSet::new();
 
     for node in &graph.nodes {
         let NodeFact::Condition(condition) = &node.fact else {
@@ -76,6 +80,9 @@ fn emit_region_scopes(graph: &mut ProgramSupergraph) {
             else {
                 continue;
             };
+            if !seen_region_spans.insert((*artifact_id, condition.callable_id, region.kind == sg::ControlRegionKind::CatchBody, region_span)) {
+                continue;
+            }
             let (kind, variant) = if region.kind == sg::ControlRegionKind::CatchBody {
                 (ScopeKind::Catch, ScopeVariant::CatchHandler)
             } else {

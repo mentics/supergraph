@@ -11,7 +11,7 @@ use crate::supergraph::{
 use crate::id_parts;
 use super::{
     SemanticCallable, SemanticContext, callable_index::CallableIndex, graph_edge, graph_node,
-    insert_edge, insert_node, span_contains, span_key,
+    insert_edge, insert_node, span_contains,
 };
 
 const CONTAINMENT_PRECISION: &str = "sg021-expression-containment";
@@ -514,7 +514,6 @@ fn quoted_contents(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use crate::supergraph::ids::NodeId;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, ExpressionAst, ExpressionKind as AstExpressionKind, FieldAccessAst, FileAst,

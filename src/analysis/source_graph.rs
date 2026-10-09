@@ -35,7 +35,7 @@ pub fn build_typescript_supergraph(project: &ProjectAst) -> ProgramSupergraph {
     typescript::build_typescript_supergraph(project)
 }
 
-pub fn build_initial_supergraph<A>(project: &ProjectAst, adapter: A) -> ProgramSupergraph
+pub(crate) fn build_initial_supergraph<A>(project: &ProjectAst, adapter: A) -> ProgramSupergraph
 where
     A: LanguageSupergraphAdapter,
 {

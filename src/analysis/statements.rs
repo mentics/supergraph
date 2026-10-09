@@ -292,7 +292,6 @@ fn statement_kind_key(kind: AstStatementKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::supergraph::ids::NodeId;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, FileAst, ProjectAst, SourceSpan, StatementAst, StatementKind as AstStatementKind,

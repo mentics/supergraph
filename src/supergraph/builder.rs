@@ -1839,7 +1839,6 @@ mod tests {
         Signature, StatementKind, SymbolKind, ThrowsTo, ThrowsToTargetKind, TracesTo, Uncertainty,
         UseKind, Uses, ValueKind, ValueLiteral, ValueRole,
     };
-    use crate::supergraph::views::StructuralGraphView;
 
     #[test]
     fn structural_node_families_are_constructible_with_envelope_metadata() {
