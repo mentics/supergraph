@@ -6,8 +6,6 @@ use crate::ast::{CallContext, SourceSpan};
 use crate::intern::Sym;
 
 pub const SCHEMA_VERSION: &str = "program-supergraph.v3";
-/// Older snapshot versions the loader still reads (their `indexes` are ignored).
-pub const READABLE_SCHEMA_VERSIONS: &[&str] = &["program-supergraph.v2", SCHEMA_VERSION];
 pub const DOMAIN_KNOWLEDGE_RECORD_SCHEMA_VERSION: &str = "domain-knowledge-record.v1";
 
 pub use super::ids::{EdgeId, FactId, NodeId, PayloadHash};
@@ -33,7 +31,7 @@ pub struct ProgramSupergraph {
     pub(crate) id_cache: IdCache,
 }
 
-/// Wire form read by `ProgramSupergraph::deserialize`; any stored `indexes` are ignored.
+/// Wire form read by `ProgramSupergraph::deserialize`.
 ///
 /// `strings` (v3 compact form) must precede `nodes` and `edges`: it installs the table that
 /// numeric `Sym` values resolve against while the later fields are parsed.
@@ -42,7 +40,6 @@ struct ProgramSupergraphWire {
     schema_version: String,
     language: String,
     root: String,
-    #[serde(default)]
     #[allow(dead_code)]
     strings: Option<StringTableWire>,
     nodes: Vec<GraphNode>,
@@ -64,11 +61,10 @@ impl TryFrom<ProgramSupergraphWire> for ProgramSupergraph {
 
     fn try_from(wire: ProgramSupergraphWire) -> Result<Self, String> {
         crate::intern::clear_read_table();
-        if !READABLE_SCHEMA_VERSIONS.contains(&wire.schema_version.as_str()) {
+        if wire.schema_version != SCHEMA_VERSION {
             return Err(format!(
-                "unsupported schema_version `{}` (readable: {})",
-                wire.schema_version,
-                READABLE_SCHEMA_VERSIONS.join(", ")
+                "unsupported schema_version `{}` (expected {SCHEMA_VERSION})",
+                wire.schema_version
             ));
         }
         let indexes = crate::supergraph::builder::build_indexes(&wire.nodes, &wire.edges);
@@ -234,15 +230,12 @@ impl ProgramSupergraph {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphNode {
     pub node_id: NodeId,
-    #[serde(default)]
     pub fact_id: Option<FactId>,
-    #[serde(default)]
     pub payload_hash: Option<PayloadHash>,
     pub kind: NodeKind,
     pub owner: SourceOwnership,
     pub span: Option<SourceSpan>,
     pub confidence: Confidence,
-    #[serde(default)]
     pub uncertainty: Uncertainty,
     pub evidence: Vec<Evidence>,
     pub fact: NodeFact,
@@ -251,9 +244,7 @@ pub struct GraphNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphEdge {
     pub edge_id: EdgeId,
-    #[serde(default)]
     pub fact_id: Option<FactId>,
-    #[serde(default)]
     pub payload_hash: Option<PayloadHash>,
     pub kind: EdgeKind,
     pub source_id: NodeId,
@@ -261,7 +252,6 @@ pub struct GraphEdge {
     pub owner: SourceOwnership,
     pub span: Option<SourceSpan>,
     pub confidence: Confidence,
-    #[serde(default)]
     pub uncertainty: Uncertainty,
     pub evidence: Vec<Evidence>,
     pub fact: EdgeFact,
@@ -428,8 +418,7 @@ impl<'de> Deserialize<'de> for Evidence {
         struct RawSyntax {
             kind: Sym,
             node_key: Option<String>,
-            #[serde(default)]
-            field_path: Vec<Sym>,
+                    field_path: Vec<Sym>,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(Evidence {
@@ -503,11 +492,8 @@ pub struct Scope {
     pub parent_scope_id: Option<NodeId>,
     pub artifact_id: NodeId,
     pub kind: ScopeKind,
-    #[serde(default)]
     pub variant: ScopeVariant,
-    #[serde(default)]
     pub language_variant: Option<Sym>,
-    #[serde(default)]
     pub binding_behavior: ScopeBindingBehavior,
     pub owner_callable_id: Option<NodeId>,
     pub span: Option<SourceSpan>,
@@ -662,7 +648,6 @@ pub struct Statement {
     pub ordinal: usize,
     pub child_statement_ids: Vec<NodeId>,
     pub expression_ids: Vec<NodeId>,
-    #[serde(default)]
     pub control_effects: Vec<StatementControlEffect>,
 }
 
@@ -754,17 +739,13 @@ pub struct NormalizedExpression {
 pub struct Condition {
     pub condition_id: NodeId,
     pub callable_id: NodeId,
-    #[serde(default)]
     pub statement_id: Option<NodeId>,
     pub expression_id: Option<NodeId>,
     pub kind: ConditionKind,
     pub controlled_statement_ids: Vec<NodeId>,
     pub outcome_labels: Vec<Sym>,
-    #[serde(default)]
     pub regions: Vec<ControlRegion>,
-    #[serde(default)]
     pub continuation: Option<ContinuationPoint>,
-    #[serde(default)]
     pub fallthrough: FallthroughBehavior,
 }
 
@@ -907,17 +888,12 @@ pub struct Value {
     pub value_id: NodeId,
     pub callable_id: Option<NodeId>,
     pub kind: ValueKind,
-    #[serde(default)]
     pub role: ValueRole,
     pub symbol_id: Option<NodeId>,
     pub expression_id: Option<NodeId>,
-    #[serde(default)]
     pub call_site_id: Option<NodeId>,
-    #[serde(default)]
     pub name: Option<Sym>,
-    #[serde(default)]
     pub ordinal: Option<usize>,
-    #[serde(default)]
     pub state_of_value_id: Option<NodeId>,
     pub type_hint: Option<Sym>,
     pub literal: Option<ValueLiteral>,

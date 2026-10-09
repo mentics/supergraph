@@ -9,7 +9,7 @@ use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use super::multimap::MultiMap;
 use super::ids::{
-    EdgeId, FactId, IdMap, IdPart, PayloadHash, Tag, callable_id_from_text, with_legacy_id_text,
+    EdgeId, FactId, IdMap, IdPart, PayloadHash, Tag, callable_id_from_text,
 };
 use crate::id_parts;
 use std::num::NonZeroU64;
@@ -1063,12 +1063,10 @@ fn stable_payload_hash_with_writer(
     writer: &mut StableHashWriter,
 ) -> PayloadHash {
     writer.reset();
-    with_legacy_id_text(|| {
-        let mut serializer = serde_json::Serializer::new(&mut *writer);
-        payload
-            .serialize(&mut serializer)
-            .expect("identity payload serialization should not fail");
-    });
+    let mut serializer = serde_json::Serializer::new(&mut *writer);
+    payload
+        .serialize(&mut serializer)
+        .expect("identity payload serialization should not fail");
     writer.finish()
 }
 
@@ -2302,10 +2300,6 @@ mod tests {
         assert_eq!(from_compact, graph);
         assert_eq!(from_expanded, graph);
 
-        let v2 = String::from_utf8(expanded.clone())
-            .unwrap()
-            .replacen("program-supergraph.v3", "program-supergraph.v2", 1);
-        assert!(serde_json::from_str::<ProgramSupergraph>(&v2).is_ok(), "v2 snapshots still load");
         let unknown = String::from_utf8(expanded)
             .unwrap()
             .replacen("program-supergraph.v3", "program-supergraph.v9", 1);
@@ -2772,45 +2766,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sg120_defaulted_serialization_fields_remain_compatible() {
-        let (graph, ids, _) = sg120_schema_fixture();
-        let mut value = serde_json::to_value(&graph).expect("graph to value");
-
-        let node = value["nodes"]
-            .as_array_mut()
-            .expect("nodes array")
-            .iter_mut()
-            .find(|node| node["node_id"] == ids.requirement.to_string())
-            .expect("requirement node JSON");
-        let node_object = node.as_object_mut().expect("node object");
-        node_object.remove("fact_id");
-        node_object.remove("payload_hash");
-        node_object.remove("uncertainty");
-
-        let edge = value["edges"]
-            .as_array_mut()
-            .expect("edges array")
-            .iter_mut()
-            .find(|edge| edge["edge_id"] == ids.traces_to.to_string())
-            .expect("trace edge JSON");
-        let edge_object = edge.as_object_mut().expect("edge object");
-        edge_object.remove("fact_id");
-        edge_object.remove("payload_hash");
-        edge_object.remove("uncertainty");
-
-        let migrated: ProgramSupergraph =
-            serde_json::from_value(value).expect("deserialize graph with omitted defaults");
-        let requirement = node_by_id(&migrated, ids.requirement);
-        assert_eq!(requirement.fact_id, None);
-        assert_eq!(requirement.payload_hash, None);
-        assert_eq!(requirement.uncertainty, Uncertainty::Exact);
-
-        let trace = edge_by_id(&migrated, ids.traces_to);
-        assert_eq!(trace.fact_id, None);
-        assert_eq!(trace.payload_hash, None);
-        assert_eq!(trace.uncertainty, Uncertainty::Exact);
-    }
 
     fn span(start: usize, end: usize) -> SourceSpan {
         SourceSpan {

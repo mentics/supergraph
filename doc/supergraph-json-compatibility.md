@@ -12,14 +12,14 @@ the same identity, provenance, uncertainty, and migration rules.
 ## Versioning Contract
 
 `ProgramSupergraph.schema_version` identifies the serialized schema family. The
-current version is `program-supergraph.v3`. Loaders also accept
-`program-supergraph.v2` snapshots (their stored `indexes` are ignored and rebuilt);
-any other version is rejected.
+current version is `program-supergraph.v3`. Loaders accept only that version;
+any other `schema_version` is rejected with an error. There is no migration path
+from earlier versions: regenerate the snapshot.
 
-### v3 changes from v2
+### v3 format
 
-- `indexes` is no longer written. Indexes are derived data and are rebuilt when a
-  snapshot is loaded. A stored `indexes` member in an older file is ignored.
+- `indexes` is not written. Indexes are derived data and are rebuilt when a
+  snapshot is loaded.
 - Interned strings (names, kinds, paths, text fields typed as interned symbols in
   the Rust schema) are written through a top-level `strings` array placed before
   `nodes`. Each such field holds an integer position into `strings` instead of
@@ -30,9 +30,11 @@ any other version is rejected.
   the same schema with every string inline and no `strings` member. Readers accept
   both forms: a field that is a JSON string is taken as text, a number as a table
   position. `--pretty` output is always expanded.
-- Node, edge, fact and payload ids are unchanged: they are the same 16 and 8 byte
-  hash ids as before and payload hashes are computed over the expanded text, so
-  they do not depend on which form was written.
+- Node ids are `prefix:hex16` hashes. Callable and external-name ids are hashes
+  like every other id (they no longer carry readable names); ids derived from
+  them, `fact_id` and `payload_hash` hash those ids normally. Payload hashes are
+  computed over the expanded text, so they do not depend on which form was
+  written.
 - `SourceSpan` byte, row and column positions are 32-bit unsigned values.
 
 `ProgramSupergraph.language` identifies the single source language represented by
@@ -71,39 +73,8 @@ immutable version markers, not traversal references. If a callable body,
 evidence, provenance, confidence, uncertainty, or endpoint changes, the subject
 ID can remain stable while `fact_id` and `payload_hash` change.
 
-Older snapshots may omit `fact_id` and `payload_hash`.
-They default to empty strings on deserialization and should be recomputed by the
-normal graph refresh/materialization pipeline before persistence or comparison.
-Migration code should never invent subject churn solely because these fields were
-missing.
-
-`program-supergraph.v2` is a breaking cleanup from `program-supergraph.v1`. It
-keeps a single top-level `language` and removes duplicated parser, analysis, and
-nested language metadata from artifact, evidence, syntax, and scope payloads.
-
-## Defaulted And Backfilled Fields
-
-Fields annotated in the Rust schema with `#[serde(default)]` are intentionally
-backward-compatible. When an older snapshot omits one of these fields, consumers
-should treat the default as an unknown or conservative value until the graph is
-refreshed.
-
-Current examples include:
-
-- `GraphNode.fact_id`, `GraphNode.payload_hash`, `GraphNode.uncertainty`;
-- `GraphEdge.fact_id`, `GraphEdge.payload_hash`, `GraphEdge.uncertainty`;
-- scope normalization metadata such as `Scope.variant`, `Scope.language_variant`,
-  and `Scope.binding_behavior`;
-- statement/expression/value additions such as control effects, value role,
-  call-site references, names, ordinals, and mutable state references;
-- structured control additions such as condition regions, continuation,
-  fallthrough, CFG outcomes, branch arms, and path-condition references;
-- `ThrowsTo` target metadata and exception text/type fields;
-- requirement path-condition summaries.
-
-Default values usually mean "not recorded by this producer", not "the producer
-proved absence". Consumers should distinguish missing/defaulted facts from exact
-negative evidence.
+`fact_id` and `payload_hash` are optional on read (absent means unknown) and are
+recomputed by the normal graph refresh pipeline before persistence.
 
 ## Node And Edge Families
 
@@ -124,31 +95,13 @@ clear unsupported-kind diagnostic.
 
 ## Index Persistence
 
-As of `program-supergraph.v3`, `ProgramSupergraph.indexes` is not persisted.
-Indexes are derived from `nodes` and `edges` and are rebuilt by the Rust loader.
-The description below applies to `program-supergraph.v2` snapshots and to the
-in-memory index shapes, and consumers that build their own indexes should follow
-it. Consumers may
-discard and rebuild indexes during migration, after tolerant loading, or when
-they suspect producer/consumer version skew.
+`ProgramSupergraph.indexes` is not persisted. Indexes are derived from `nodes` and
+`edges` and are rebuilt by the Rust loader; other consumers should build their own
+from stable subject IDs, never from runtime graph handles or vector positions of
+another snapshot.
 
-Index entries must use stable subject IDs, never runtime graph handles such as
-`petgraph::NodeIndex`, vector positions from another snapshot, or fact IDs.
-`node_position_by_id` and `edge_position_by_id` are only valid for the serialized
-`nodes` and `edges` vectors in the same snapshot.
-
-`GraphIndexes.source_span_to_nodes` uses a JSON object, so its structured key is
-serialized as a deterministic string:
-
-```text
-<artifact_id-or-empty>\u001f<start_byte>:<end_byte>:<start_row>:<start_column>:<end_row>:<end_column>
-```
-
-The separator is ASCII unit separator (`U+001F`). Empty artifact ID means the
-span is not scoped to a known artifact. Consumers must parse all six span
-numbers as unsigned byte/row/column positions and must not split on `:` before
-separating the artifact prefix. Changing this encoding is breaking for
-`program-supergraph.v2`.
+`SourceSpanIndexKey` (artifact id plus six span numbers) is an in-memory index key
+only; it has no persisted encoding.
 
 ## Provenance And Evidence
 
@@ -212,7 +165,7 @@ CLI consumers should:
 
 - check `schema_version` before reading the body;
 - tolerate additive fields they do not use;
-- rebuild indexes when migrating or normalizing snapshots;
+- build their own indexes from nodes and edges;
 - compare stable subject IDs for graph references and `payload_hash`/`fact_id`
   for exact fact-version comparisons;
 - include fixture snapshots or roundtrip tests for every schema version they
@@ -224,9 +177,7 @@ Downstream consumers should keep lightweight compatibility tests that:
 
 - deserialize the newest supported `ProgramSupergraph` JSON;
 - reject unknown `schema_version` values with a clear error;
-- roundtrip `SourceSpanIndexKey` strings and rebuild `GraphIndexes`;
-- load older snapshots that omit defaulted fields and verify refresh/backfill
-  behavior;
+- rebuild indexes after loading;
 - compare subject IDs separately from `fact_id` and `payload_hash`;
 - preserve uncertain, unsupported, external, unresolved, stale, ambiguous, and
   domain-knowledge facts in user-visible diagnostics or metadata.

@@ -909,15 +909,6 @@ fn call_target_part(call_edge: &sg::GraphEdge) -> IdPart<'static> {
     }
 }
 
-/// The identity text a callable id hashed as before ids became compact. Edge ids derived from a
-/// callee id embedded that text in their precision key, so it is needed to keep them identical.
-fn legacy_id_text(id: NodeId) -> String {
-    crate::supergraph::ids::with_legacy_id_text(|| serde_json::to_value(id))
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| id.to_string())
-}
-
 fn add_formal_unavailable_diagnostic(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
@@ -1262,7 +1253,7 @@ fn add_returns_to(
                 "returns-to",
                 return_id,
                 call_result_id,
-                &format!("{}:{precision}", legacy_id_text(callee_id)),
+                &format!("{}:{precision}", callee_id),
             ),
             EdgeKind::ReturnsTo,
             return_id,
@@ -1300,7 +1291,7 @@ fn add_throws_to(
                 "throws-to",
                 raise_id,
                 target_id,
-                &format!("{}:{precision}", legacy_id_text(callee_id)),
+                &format!("{}:{precision}", callee_id),
             ),
             EdgeKind::ThrowsTo,
             raise_id,

@@ -4,13 +4,11 @@
 //! (`prefix:hex16`) is only produced by `Display`/serde; in memory an id is 8 bytes
 //! (typed ids) or 16 bytes ([`NodeId`], which also carries a [`Tag`]).
 
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::num::NonZeroU64;
 use std::str::FromStr;
-use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -74,10 +72,6 @@ impl IdHasher {
 
     /// Hashes another id as its textual form, so the result equals hashing `id.to_string()`.
     pub fn part_id(&mut self, id: NodeId) {
-        if let Some(name) = legacy_text(id) {
-            self.part_str(name);
-            return;
-        }
         self.write_bytes(id.tag.prefix().as_bytes());
         self.write_bytes(b":");
         self.write_bytes(&hex16(id.hash.get()));
@@ -164,82 +158,15 @@ macro_rules! id_parts {
     };
 }
 
-// ---- Legacy identity text ----------------------------------------------------------------
-//
-// Callable ids and ids of external names used to be readable names (`pkg.mod.func`,
-// `anyhow.Context`); they are now hashes. Every other id derived from such an id hashed that
-// name, and so did every payload hash. To keep all derived ids and payload hashes bit-identical
-// to the pre-refactor output (so the refactor can be verified against golden output), these ids
-// remember the text they were created from and hashing / payload serialization substitute it.
-// This table can be dropped when output-changing hash simplifications are made.
-
-type LegacyKey = (Tag, u64);
-
-fn legacy_names() -> &'static RwLock<IdMap<LegacyKey, &'static str>> {
-    static NAMES: OnceLock<RwLock<IdMap<LegacyKey, &'static str>>> = OnceLock::new();
-    NAMES.get_or_init(|| RwLock::new(IdMap::default()))
-}
-
-fn legacy_text(id: NodeId) -> Option<&'static str> {
-    if !matches!(id.tag, Tag::Callable | Tag::ExternalTarget) {
-        return None;
-    }
-    legacy_names()
-        .read()
-        .expect("legacy names")
-        .get(&(id.tag, id.hash.get()))
-        .copied()
-}
-
-/// Creates an id of `tag` from legacy identity text (a qualified name) and remembers the text.
-pub fn id_from_legacy_text(tag: Tag, text: &str) -> NodeId {
-    let id = NodeId::stable(tag, &[IdPart::Str(text)]);
-    let key = (tag, id.hash.get());
-    let names = legacy_names();
-    if !names.read().expect("legacy names").contains_key(&key) {
-        names
-            .write()
-            .expect("legacy names")
-            .entry(key)
-            .or_insert_with(|| Box::leak(text.to_string().into_boxed_str()));
-    }
-    id
-}
-
-/// Id of a callable from its legacy identity text (its qualified name, or
-/// `"{module_path}:<module>"` for a module initializer).
+/// Id of a callable from its qualified name (or `"{module_path}:<module>"` for a module
+/// initializer).
 pub fn callable_id_from_text(text: &str) -> NodeId {
-    id_from_legacy_text(Tag::Callable, text)
+    NodeId::stable(Tag::Callable, &[IdPart::Str(text)])
 }
 
 /// Id of an external name (`anyhow.Context`), as used by import bindings.
 pub fn external_name_id(text: &str) -> NodeId {
-    id_from_legacy_text(Tag::ExternalTarget, text)
-}
-
-/// Orders two ids like their pre-refactor string forms: ids of named callables / external names
-/// compare by their legacy text, all other ids by `prefix:hex16` (which is `NodeId::cmp`).
-pub fn legacy_cmp(left: &NodeId, right: &NodeId) -> std::cmp::Ordering {
-    match (legacy_text(*left), legacy_text(*right)) {
-        (None, None) => left.cmp(right),
-        (l, r) => {
-            let l = l.map_or_else(|| left.to_string(), str::to_string);
-            let r = r.map_or_else(|| right.to_string(), str::to_string);
-            l.cmp(&r)
-        }
-    }
-}
-
-thread_local! {
-    static LEGACY_SERIALIZE: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Runs `work` with legacy-text ids serializing as their legacy identity text (payload hashing).
-pub fn with_legacy_id_text<R>(work: impl FnOnce() -> R) -> R {
-    let previous = LEGACY_SERIALIZE.with(|flag| flag.replace(true));
-    let result = work();
-    LEGACY_SERIALIZE.with(|flag| flag.set(previous));
-    result
+    NodeId::stable(Tag::ExternalTarget, &[IdPart::Str(text)])
 }
 
 pub fn hash_parts(parts: &[IdPart<'_>]) -> NonZeroU64 {
@@ -373,11 +300,6 @@ impl FromStr for NodeId {
 
 impl Serialize for NodeId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if LEGACY_SERIALIZE.with(Cell::get) {
-            if let Some(text) = legacy_text(*self) {
-                return serializer.serialize_str(text);
-            }
-        }
         serializer.collect_str(self)
     }
 }
@@ -636,33 +558,12 @@ mod tests {
     use super::*;
     use std::mem::size_of;
 
-    /// The historical string implementation.
-    fn legacy_stable_id(prefix: &str, parts: &[&str]) -> String {
-        let mut hash = 0xcbf29ce484222325_u64;
-        for part in parts {
-            for byte in part.as_bytes() {
-                hash ^= u64::from(*byte);
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-            hash ^= 0xff;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        format!("{prefix}:{hash:016x}")
-    }
-
     #[test]
     fn sizes_are_compact() {
         assert_eq!(size_of::<ExpressionId>(), 8);
         assert_eq!(size_of::<Option<ExpressionId>>(), 8);
         assert_eq!(size_of::<EdgeId>(), 8);
         assert_eq!(size_of::<NodeId>(), 16);
-    }
-
-    #[test]
-    fn matches_legacy_text() {
-        let parts = ["a.py", "foo", "12:34"];
-        let id = NodeId::stable(Tag::Callable, &parts.map(IdPart::Str));
-        assert_eq!(id.to_string(), legacy_stable_id("callable", &parts));
     }
 
     #[test]
