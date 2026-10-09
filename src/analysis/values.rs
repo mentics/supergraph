@@ -1292,7 +1292,8 @@ mod tests {
                 raises: Vec::new(),
                 field_accesses: Vec::new(),
                 index_accesses: Vec::new(),
-            }],
+                        parse_errors: Vec::new(),
+                    }],
         }
     }
 
@@ -1433,7 +1434,8 @@ mod tests {
                 raises: Vec::new(),
                 field_accesses: Vec::new(),
                 index_accesses: Vec::new(),
-            }],
+                        parse_errors: Vec::new(),
+                    }],
         }
     }
 

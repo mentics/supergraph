@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use walkdir::{DirEntry, WalkDir};
+use ignore::{DirEntry, WalkBuilder};
 
 /// Directories that never hold project source: VCS metadata, virtual environments,
 /// dependency trees and build or tool caches.
@@ -25,7 +25,7 @@ const SKIPPED_DIRECTORIES: &[&str] = &[
 /// always walked, so analyzing a directory that is named like a skipped one still works.
 fn should_descend(entry: &DirEntry) -> bool {
     entry.depth() == 0
-        || !entry.file_type().is_dir()
+        || !entry.file_type().is_some_and(|file_type| file_type.is_dir())
         || !SKIPPED_DIRECTORIES
             .iter()
             .any(|skipped| entry.file_name() == *skipped)
@@ -50,113 +50,48 @@ pub struct RustSourceFile {
 }
 
 pub fn discover_python_files(root: &Path) -> Result<Vec<PythonSourceFile>> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize analysis root {}", root.display()))?;
-
-    let mut files = Vec::new();
-    for entry in WalkDir::new(&root)
-        .sort_by_file_name()
+    Ok(discover(root, |path| has_extension(path, &["py"]))?
         .into_iter()
-        .filter_entry(should_descend)
-    {
-        let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.into_path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("py") {
-            continue;
-        }
-
-        let relative_path = path
-            .strip_prefix(&root)
-            .with_context(|| {
-                format!(
-                    "failed to make {} relative to {}",
-                    path.display(),
-                    root.display()
-                )
-            })?
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-
-        files.push(PythonSourceFile {
-            absolute_path: path,
-            relative_path,
-        });
-    }
-
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok(files)
+        .map(|(absolute_path, relative_path)| PythonSourceFile { absolute_path, relative_path })
+        .collect())
 }
 
 pub fn discover_typescript_files(root: &Path) -> Result<Vec<TypeScriptSourceFile>> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize analysis root {}", root.display()))?;
-
-    let mut files = Vec::new();
-    for entry in WalkDir::new(&root)
-        .sort_by_file_name()
+    Ok(discover(root, is_typescript_source)?
         .into_iter()
-        .filter_entry(should_descend)
-    {
-        let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.into_path();
-        if !is_typescript_source(&path) {
-            continue;
-        }
-
-        let relative_path = path
-            .strip_prefix(&root)
-            .with_context(|| {
-                format!(
-                    "failed to make {} relative to {}",
-                    path.display(),
-                    root.display()
-                )
-            })?
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-
-        files.push(TypeScriptSourceFile {
-            absolute_path: path,
-            relative_path,
-        });
-    }
-
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok(files)
+        .map(|(absolute_path, relative_path)| TypeScriptSourceFile { absolute_path, relative_path })
+        .collect())
 }
 
 pub fn discover_rust_files(root: &Path) -> Result<Vec<RustSourceFile>> {
+    Ok(discover(root, |path| has_extension(path, &["rs"]))?
+        .into_iter()
+        .map(|(absolute_path, relative_path)| RustSourceFile { absolute_path, relative_path })
+        .collect())
+}
+
+/// Walks `root` and returns `(absolute, root-relative)` paths of the files `wanted` accepts,
+/// sorted by relative path. Honors `.gitignore`, `.git/info/exclude` and the global gitignore
+/// (also outside a git repository), and does not descend into hidden directories.
+fn discover(root: &Path, wanted: impl Fn(&Path) -> bool) -> Result<Vec<(PathBuf, String)>> {
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize analysis root {}", root.display()))?;
 
     let mut files = Vec::new();
-    for entry in WalkDir::new(&root)
-        .sort_by_file_name()
-        .into_iter()
+    for entry in WalkBuilder::new(&root)
+        .require_git(false)
+        .sort_by_file_name(|left, right| left.cmp(right))
         .filter_entry(should_descend)
+        .build()
     {
         let entry = entry.with_context(|| format!("failed to walk {}", root.display()))?;
-        if !entry.file_type().is_file() {
+        if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
             continue;
         }
 
         let path = entry.into_path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+        if !wanted(&path) {
             continue;
         }
 
@@ -174,21 +109,21 @@ pub fn discover_rust_files(root: &Path) -> Result<Vec<RustSourceFile>> {
             .collect::<Vec<_>>()
             .join("/");
 
-        files.push(RustSourceFile {
-            absolute_path: path,
-            relative_path,
-        });
+        files.push((path, relative_path));
     }
 
-    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    files.sort_by(|left, right| left.1.cmp(&right.1));
     Ok(files)
 }
 
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extensions.contains(&extension))
+}
+
 fn is_typescript_source(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some("ts" | "tsx")
-    )
+    has_extension(path, &["ts", "tsx"])
 }
 
 #[cfg(test)]
@@ -198,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovery_skips_environment_and_build_directories() {
+    fn discovery_skips_environment_build_hidden_and_gitignored_directories() {
         let root = std::env::temp_dir().join(format!("supergraph-fs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         for dir in [
@@ -209,6 +144,8 @@ mod tests {
             ".git/hooks",
             "node_modules/dep",
             "pkg/__pycache__",
+            ".claude/worktrees/w",
+            "ignored",
         ] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
@@ -224,8 +161,13 @@ mod tests {
             "node_modules/dep/h.ts",
             "pkg/lib.rs",
             "target/debug/i.rs",
+            ".claude/worktrees/w/j.py",
+            "ignored/k.py",
+            ".gitignore",
         ] {
-            fs::write(root.join(file), "").unwrap();
+            let contents = if file == ".gitignore" { "ignored/
+" } else { "" };
+            fs::write(root.join(file), contents).unwrap();
         }
 
         let python = discover_python_files(&root).unwrap();

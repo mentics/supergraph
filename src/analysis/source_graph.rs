@@ -36,9 +36,11 @@ pub fn build_initial_supergraph<A>(project: &ProjectAst, adapter: A) -> ProgramS
 where
     A: LanguageSupergraphAdapter,
 {
-    let mut lowerer = SourceGraphLowerer::new(project.root.clone(), adapter);
-    lowerer.lower_project(project);
-    lowerer.finish()
+    crate::timing::stage("initial graph (lowering)", || {
+        let mut lowerer = SourceGraphLowerer::new(project.root.clone(), adapter);
+        lowerer.lower_project(project);
+        lowerer.finish()
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +130,24 @@ where
             },
             vec![self.source_evidence("source artifact", Some(module_span))],
         );
+
+        for error in &file.parse_errors {
+            let message = format!(
+                "{}:{}:{}: {}",
+                file.path,
+                error.source_span.start_row + 1,
+                error.source_span.start_column + 1,
+                error.message
+            );
+            self.add_diagnostic(
+                DiagnosticKind::ParseError,
+                Severity::Error,
+                message,
+                Some(artifact_id.clone()),
+                Some(error.source_span),
+                Vec::new(),
+            );
+        }
 
         self.builder.add_scope(
             Scope {
@@ -1148,6 +1168,7 @@ mod tests {
                 raises: Vec::new(),
                 field_accesses: Vec::new(),
                 index_accesses: Vec::new(),
+                parse_errors: Vec::new(),
             }],
         }
     }

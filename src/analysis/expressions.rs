@@ -695,6 +695,7 @@ mod tests {
                     owner_id: owner_id.to_string(),
                     source_span: span(52, 64),
                 }],
+                parse_errors: Vec::new(),
             }],
         }
     }
