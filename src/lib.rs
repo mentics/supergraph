@@ -3,6 +3,7 @@ pub mod ast;
 mod fs;
 mod parser;
 pub mod supergraph;
+pub mod intern;
 pub mod timing;
 
 pub use analysis::{

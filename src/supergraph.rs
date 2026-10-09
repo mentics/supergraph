@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod ids;
 pub mod invalidation;
 pub mod schema;
 pub mod views;
