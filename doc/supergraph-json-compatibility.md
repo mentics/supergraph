@@ -12,7 +12,28 @@ the same identity, provenance, uncertainty, and migration rules.
 ## Versioning Contract
 
 `ProgramSupergraph.schema_version` identifies the serialized schema family. The
-current version is `program-supergraph.v2`.
+current version is `program-supergraph.v3`. Loaders also accept
+`program-supergraph.v2` snapshots (their stored `indexes` are ignored and rebuilt);
+any other version is rejected.
+
+### v3 changes from v2
+
+- `indexes` is no longer written. Indexes are derived data and are rebuilt when a
+  snapshot is loaded. A stored `indexes` member in an older file is ignored.
+- Interned strings (names, kinds, paths, text fields typed as interned symbols in
+  the Rust schema) are written through a top-level `strings` array placed before
+  `nodes`. Each such field holds an integer position into `strings` instead of
+  the text. The table is sorted by text so output stays deterministic. A reader
+  must parse `strings` before `nodes` and `edges`; the writer always emits it
+  first.
+- `build --expand-strings` (and `ProgramSupergraph::write_json_expanded`) writes
+  the same schema with every string inline and no `strings` member. Readers accept
+  both forms: a field that is a JSON string is taken as text, a number as a table
+  position. `--pretty` output is always expanded.
+- Node, edge, fact and payload ids are unchanged: they are the same 16 and 8 byte
+  hash ids as before and payload hashes are computed over the expanded text, so
+  they do not depend on which form was written.
+- `SourceSpan` byte, row and column positions are 32-bit unsigned values.
 
 `ProgramSupergraph.language` identifies the single source language represented by
 the snapshot. A persisted supergraph is not a mixed-language container; producers
@@ -103,8 +124,11 @@ clear unsupported-kind diagnostic.
 
 ## Index Persistence
 
-`ProgramSupergraph.indexes` is persisted in CLI JSON for convenience and
-determinism, but indexes are derived from `nodes` and `edges`. Consumers may
+As of `program-supergraph.v3`, `ProgramSupergraph.indexes` is not persisted.
+Indexes are derived from `nodes` and `edges` and are rebuilt by the Rust loader.
+The description below applies to `program-supergraph.v2` snapshots and to the
+in-memory index shapes, and consumers that build their own indexes should follow
+it. Consumers may
 discard and rebuild indexes during migration, after tolerant loading, or when
 they suspect producer/consumer version skew.
 
@@ -179,8 +203,8 @@ dependency relationship actually changed.
 
 ## CLI JSON Compatibility
 
-The public supergraph CLI commands emit the full `ProgramSupergraph` snapshot,
-including indexes, using the same schema as library callers. Pretty and compact
+The public supergraph CLI commands emit the full `ProgramSupergraph` snapshot
+(nodes and edges, without indexes) using the same schema as library callers. Pretty and compact
 JSON must be semantically equivalent. Output ordering is deterministic for a
 given input, language, and source content.
 

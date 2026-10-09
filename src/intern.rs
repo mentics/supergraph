@@ -211,16 +211,101 @@ impl PartialEq<&str> for Sym {
     }
 }
 
+thread_local! {
+    /// Global interner index -> position in the written string table; set while writing the
+    /// compact (table) form so `Sym` serializes as a number instead of text.
+    static WRITE_RANKS: std::cell::RefCell<Option<std::sync::Arc<Vec<u32>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// String table position -> `Sym`; set while loading a document that carries a table.
+    static READ_TABLE: std::cell::RefCell<Option<Vec<Sym>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Snapshot of the interner for the compact on-disk form: every interned string in
+/// ascending text order (so the table is deterministic) plus the rank of each `Sym`.
+pub struct StringTable {
+    pub strings: Vec<&'static str>,
+    ranks: std::sync::Arc<Vec<u32>>,
+}
+
+impl StringTable {
+    pub fn snapshot() -> StringTable {
+        let strings = interner().strings.read().expect("interner table").clone();
+        let mut order: Vec<u32> = (0..strings.len() as u32).collect();
+        order.sort_unstable_by(|left, right| strings[*left as usize].cmp(strings[*right as usize]));
+        let mut ranks = vec![0u32; strings.len()];
+        for (rank, index) in order.iter().enumerate() {
+            ranks[*index as usize] = rank as u32;
+        }
+        StringTable {
+            strings: order.iter().map(|index| strings[*index as usize]).collect(),
+            ranks: std::sync::Arc::new(ranks),
+        }
+    }
+
+    /// Runs `f` with `Sym` serializing as table positions on the current thread.
+    pub fn serialize_with<R>(&self, f: impl FnOnce() -> R) -> R {
+        let previous = WRITE_RANKS.with(|slot| slot.replace(Some(self.ranks.clone())));
+        let result = f();
+        WRITE_RANKS.with(|slot| *slot.borrow_mut() = previous);
+        result
+    }
+}
+
+/// Installs the table read from a document so numeric `Sym`s on this thread resolve.
+pub fn install_read_table(strings: &[String]) {
+    let table = strings.iter().map(|text| Sym::new(text)).collect();
+    READ_TABLE.with(|slot| *slot.borrow_mut() = Some(table));
+}
+
+/// Forgets the table installed by `install_read_table`.
+pub fn clear_read_table() {
+    READ_TABLE.with(|slot| *slot.borrow_mut() = None);
+}
+
 impl Serialize for Sym {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
+        let rank = WRITE_RANKS.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .map(|ranks| ranks[self.index() as usize])
+        });
+        match rank {
+            Some(rank) => serializer.serialize_u32(rank),
+            None => serializer.serialize_str(self.as_str()),
+        }
+    }
+}
+
+struct SymVisitor;
+
+impl serde::de::Visitor<'_> for SymVisitor {
+    type Value = Sym;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a string or a string-table index")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Sym, E> {
+        Ok(Sym::new(text))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, position: u64) -> Result<Sym, E> {
+        READ_TABLE.with(|slot| match slot.borrow().as_ref() {
+            None => Err(E::custom(
+                "numeric string reference without a preceding `strings` table",
+            )),
+            Some(table) => table
+                .get(position as usize)
+                .copied()
+                .ok_or_else(|| E::custom(format!("string table index {position} out of range"))),
+        })
     }
 }
 
 impl<'de> Deserialize<'de> for Sym {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = std::borrow::Cow::<str>::deserialize(deserializer)?;
-        Ok(Sym::new(&text))
+        deserializer.deserialize_any(SymVisitor)
     }
 }
 
@@ -258,6 +343,20 @@ mod tests {
         let json = serde_json::to_string(&sym).unwrap();
         assert_eq!(json, "\"serde \\\"quoted\\\"\"");
         assert_eq!(serde_json::from_str::<Sym>(&json).unwrap(), sym);
+    }
+
+    #[test]
+    fn table_form_round_trips() {
+        let sym = Sym::new("table form text");
+        let table = StringTable::snapshot();
+        let json = table.serialize_with(|| serde_json::to_string(&sym).unwrap());
+        assert!(json.parse::<u32>().is_ok(), "table form is numeric: {json}");
+        let strings: Vec<String> = table.strings.iter().map(|text| text.to_string()).collect();
+        assert!(serde_json::from_str::<Sym>(&json).is_err(), "no table installed yet");
+        install_read_table(&strings);
+        assert_eq!(serde_json::from_str::<Sym>(&json).unwrap(), sym);
+        clear_read_table();
+        assert_eq!(serde_json::to_string(&sym).unwrap(), "\"table form text\"");
     }
 
     #[test]

@@ -40,9 +40,12 @@ enum Command {
         /// Write JSON to this file instead of stdout.
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Pretty-print the JSON.
+        /// Pretty-print the JSON (implies --expand-strings).
         #[arg(long)]
         pretty: bool,
+        /// Write strings inline instead of through the `strings` table.
+        #[arg(long)]
+        expand_strings: bool,
         /// Print a per-stage time breakdown to stderr.
         #[arg(long)]
         timings: bool,
@@ -61,7 +64,7 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Build { language, path, output, pretty, timings } => {
+        Command::Build { language, path, output, pretty, expand_strings, timings } => {
             if timings {
                 supergraph::timing::enable();
             }
@@ -71,7 +74,7 @@ fn main() -> Result<()> {
                 Language::Typescript => analyze_typescript_supergraph(&path)?,
             };
             let r = supergraph::timing::stage("serialize + write", || {
-                emit_graph(&graph, output, pretty)
+                emit_graph(&graph, output, pretty, expand_strings)
             });
             if timings {
                 eprintln!("{}", supergraph::timing::report());
@@ -107,7 +110,12 @@ fn emit<T: Serialize>(value: &T, output: Option<PathBuf>, pretty: bool) -> Resul
     }
 }
 
-fn emit_graph(graph: &ProgramSupergraph, output: Option<PathBuf>, pretty: bool) -> Result<()> {
+fn emit_graph(
+    graph: &ProgramSupergraph,
+    output: Option<PathBuf>,
+    pretty: bool,
+    expand_strings: bool,
+) -> Result<()> {
     if pretty {
         return emit(graph, output, pretty);
     }
@@ -116,17 +124,29 @@ fn emit_graph(graph: &ProgramSupergraph, output: Option<PathBuf>, pretty: bool) 
             let file = fs::File::create(&path)
                 .with_context(|| format!("failed to write {}", path.display()))?;
             let mut writer = BufWriter::with_capacity(1 << 20, file);
-            graph.write_json(&mut writer)?;
+            write_graph(graph, &mut writer, expand_strings)?;
             writer.flush()?;
             Ok(())
         }
         None => {
             let stdout = std::io::stdout();
             let mut writer = BufWriter::with_capacity(1 << 20, stdout.lock());
-            graph.write_json(&mut writer)?;
+            write_graph(graph, &mut writer, expand_strings)?;
             writeln!(writer)?;
             writer.flush()?;
             Ok(())
         }
+    }
+}
+
+fn write_graph<W: Write>(
+    graph: &ProgramSupergraph,
+    writer: &mut W,
+    expand_strings: bool,
+) -> std::io::Result<()> {
+    if expand_strings {
+        graph.write_json_expanded(writer)
+    } else {
+        graph.write_json(writer)
     }
 }

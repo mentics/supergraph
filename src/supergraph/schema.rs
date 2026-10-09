@@ -5,7 +5,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use crate::ast::{CallContext, SourceSpan};
 use crate::intern::Sym;
 
-pub const SCHEMA_VERSION: &str = "program-supergraph.v2";
+pub const SCHEMA_VERSION: &str = "program-supergraph.v3";
+/// Older snapshot versions the loader still reads (their `indexes` are ignored).
+pub const READABLE_SCHEMA_VERSIONS: &[&str] = &["program-supergraph.v2", SCHEMA_VERSION];
 pub const DOMAIN_KNOWLEDGE_RECORD_SCHEMA_VERSION: &str = "domain-knowledge-record.v1";
 
 pub use super::ids::{EdgeId, FactId, NodeId, PayloadHash};
@@ -17,7 +19,7 @@ pub type StableId = String;
 pub type SubjectId = StableId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "ProgramSupergraphWire")]
+#[serde(try_from = "ProgramSupergraphWire")]
 pub struct ProgramSupergraph {
     pub schema_version: String,
     pub language: String,
@@ -32,19 +34,45 @@ pub struct ProgramSupergraph {
 }
 
 /// Wire form read by `ProgramSupergraph::deserialize`; any stored `indexes` are ignored.
+///
+/// `strings` (v3 compact form) must precede `nodes` and `edges`: it installs the table that
+/// numeric `Sym` values resolve against while the later fields are parsed.
 #[derive(Deserialize)]
 struct ProgramSupergraphWire {
     schema_version: String,
     language: String,
     root: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    strings: Option<StringTableWire>,
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
 }
 
-impl From<ProgramSupergraphWire> for ProgramSupergraph {
-    fn from(wire: ProgramSupergraphWire) -> Self {
+struct StringTableWire;
+
+impl<'de> Deserialize<'de> for StringTableWire {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let strings = Vec::<String>::deserialize(deserializer)?;
+        crate::intern::install_read_table(&strings);
+        Ok(StringTableWire)
+    }
+}
+
+impl TryFrom<ProgramSupergraphWire> for ProgramSupergraph {
+    type Error = String;
+
+    fn try_from(wire: ProgramSupergraphWire) -> Result<Self, String> {
+        crate::intern::clear_read_table();
+        if !READABLE_SCHEMA_VERSIONS.contains(&wire.schema_version.as_str()) {
+            return Err(format!(
+                "unsupported schema_version `{}` (readable: {})",
+                wire.schema_version,
+                READABLE_SCHEMA_VERSIONS.join(", ")
+            ));
+        }
         let indexes = crate::supergraph::builder::build_indexes(&wire.nodes, &wire.edges);
-        Self {
+        Ok(Self {
             schema_version: wire.schema_version,
             language: wire.language,
             root: wire.root,
@@ -52,7 +80,7 @@ impl From<ProgramSupergraphWire> for ProgramSupergraph {
             edges: wire.edges,
             indexes,
             id_cache: IdCache::default(),
-        }
+        })
     }
 }
 
@@ -78,9 +106,19 @@ impl PartialEq for IdCache {
 impl Eq for IdCache {}
 
 impl ProgramSupergraph {
-    /// Writes the compact JSON form, byte-identical to `serde_json::to_writer(self)`, but
-    /// serializes nodes and edges on separate threads.
+    /// Writes the compact v3 form: a sorted `strings` table followed by nodes and edges in
+    /// which every interned string is a table position. Indexes are not written.
     pub fn write_json<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<()> {
+        self.write_json_impl(out, true)
+    }
+
+    /// Writes the expanded form (strings inline, no table), byte-identical to
+    /// `serde_json::to_writer(self)`.
+    pub fn write_json_expanded<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<()> {
+        self.write_json_impl(out, false)
+    }
+
+    fn write_json_impl<W: std::io::Write>(&self, out: &mut W, table_form: bool) -> std::io::Result<()> {
         fn to_error(error: serde_json::Error) -> std::io::Error {
             std::io::Error::other(error)
         }
@@ -95,6 +133,21 @@ impl ProgramSupergraph {
             Ok(buffer)
         }
 
+        let table = table_form.then(crate::intern::StringTable::snapshot);
+        let table = table.as_ref();
+        let chunk_json = move |chunk_is_node: bool, node_chunk: &[GraphNode], edge_chunk: &[GraphEdge]| {
+            let run = || {
+                if chunk_is_node {
+                    serialize_chunk(node_chunk)
+                } else {
+                    serialize_chunk(edge_chunk)
+                }
+            };
+            match table {
+                Some(table) => table.serialize_with(run),
+                None => run(),
+            }
+        };
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
         let node_chunk = self.nodes.len().div_ceil(threads).max(1024);
         let edge_chunk = self.edges.len().div_ceil(threads).max(1024);
@@ -102,12 +155,12 @@ impl ProgramSupergraph {
             let nodes = self
                 .nodes
                 .chunks(node_chunk)
-                .map(|chunk| scope.spawn(move || serialize_chunk(chunk)))
+                .map(|chunk| scope.spawn(move || chunk_json(true, chunk, &[])))
                 .collect::<Vec<_>>();
             let edges = self
                 .edges
                 .chunks(edge_chunk)
-                .map(|chunk| scope.spawn(move || serialize_chunk(chunk)))
+                .map(|chunk| scope.spawn(move || chunk_json(false, &[], chunk)))
                 .collect::<Vec<_>>();
 
             out.write_all(b"{\"schema_version\":")?;
@@ -116,6 +169,10 @@ impl ProgramSupergraph {
             serde_json::to_writer(&mut *out, &self.language)?;
             out.write_all(b",\"root\":")?;
             serde_json::to_writer(&mut *out, &self.root)?;
+            if let Some(table) = table {
+                out.write_all(b",\"strings\":")?;
+                serde_json::to_writer(&mut *out, &table.strings)?;
+            }
             for (name, parts) in [("nodes", nodes), ("edges", edges)] {
                 out.write_all(b",\"")?;
                 out.write_all(name.as_bytes())?;

@@ -2282,6 +2282,37 @@ mod tests {
     }
 
     #[test]
+    fn v3_table_form_roundtrips_and_matches_expanded_form() {
+        let graph = graph_with_callable_body(span(10, 40));
+
+        let mut compact = Vec::new();
+        graph.write_json(&mut compact).expect("write compact");
+        let mut expanded = Vec::new();
+        graph.write_json_expanded(&mut expanded).expect("write expanded");
+        assert_eq!(
+            String::from_utf8(expanded.clone()).unwrap(),
+            serde_json::to_string(&graph).unwrap(),
+            "expanded writer matches the derived serializer"
+        );
+        let compact_text = String::from_utf8(compact.clone()).unwrap();
+        assert!(compact_text.contains("\"strings\":["));
+
+        let from_compact: ProgramSupergraph = serde_json::from_slice(&compact).expect("load compact");
+        let from_expanded: ProgramSupergraph = serde_json::from_slice(&expanded).expect("load expanded");
+        assert_eq!(from_compact, graph);
+        assert_eq!(from_expanded, graph);
+
+        let v2 = String::from_utf8(expanded.clone())
+            .unwrap()
+            .replacen("program-supergraph.v3", "program-supergraph.v2", 1);
+        assert!(serde_json::from_str::<ProgramSupergraph>(&v2).is_ok(), "v2 snapshots still load");
+        let unknown = String::from_utf8(expanded)
+            .unwrap()
+            .replacen("program-supergraph.v3", "program-supergraph.v9", 1);
+        assert!(serde_json::from_str::<ProgramSupergraph>(&unknown).is_err());
+    }
+
+    #[test]
     fn uncertainty_classifications_cover_sg013_acceptance_examples() {
         let artifact_id = test_id("artifact:main");
         let scope_id = test_id("scope:module");
