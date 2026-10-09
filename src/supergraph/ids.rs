@@ -305,6 +305,7 @@ tags! {
     DataFlowNode => "df-node",
     Diagnostic => "diagnostic",
     DomainKnowledge => "domain-knowledge",
+    Edge => "edge",
     Expression => "expression",
     ExternalTarget => "external-target",
     External => "external",
@@ -522,6 +523,24 @@ typed_id!(
     EdgeId,
     "edge"
 );
+impl From<EdgeId> for NodeId {
+    fn from(id: EdgeId) -> NodeId {
+        NodeId::new(Tag::Edge, id.0)
+    }
+}
+
+impl TryFrom<NodeId> for EdgeId {
+    type Error = WrongTag;
+
+    fn try_from(id: NodeId) -> Result<Self, WrongTag> {
+        if id.tag == Tag::Edge {
+            Ok(Self(id.hash))
+        } else {
+            Err(WrongTag { expected: Tag::Edge, found: id.tag })
+        }
+    }
+}
+
 typed_id!(
     /// Identity hash of a node or edge, including its payload and provenance.
     FactId,

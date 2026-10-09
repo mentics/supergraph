@@ -962,7 +962,7 @@ fn add_formal_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id],
+                related: vec![calls.call_site_id, call_edge.edge_id.into()],
             }),
         ),
     );
@@ -1013,7 +1013,7 @@ fn add_receiver_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id],
+                related: vec![calls.call_site_id, call_edge.edge_id.into()],
             }),
         ),
     );
@@ -1064,7 +1064,7 @@ fn add_return_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id],
+                related: vec![calls.call_site_id, call_edge.edge_id.into()],
             }),
         ),
     );
@@ -1115,7 +1115,7 @@ fn add_throws_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id],
+                related: vec![calls.call_site_id, call_edge.edge_id.into()],
             }),
         ),
     );
@@ -1238,7 +1238,7 @@ fn add_parameter_out_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id],
+                related: vec![calls.call_site_id, call_edge.edge_id.into()],
             }),
         ),
     );

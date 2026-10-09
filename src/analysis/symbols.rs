@@ -1421,8 +1421,11 @@ fn callable_target(
 fn target_node_id(target: &BindingTarget) -> Option<NodeId> {
     match target {
         BindingTarget::Callable(target) => Some(*target),
-        // Class targets created here carry the class scope id's text.
-        BindingTarget::Class(text) | BindingTarget::Module(text) => text.parse().ok(),
+        // Class targets created here carry the class scope id's text; adapter-made class and
+        // module targets only carry a qualified name, which stays a dangling name-based target.
+        BindingTarget::Class(text) | BindingTarget::Module(text) => {
+            Some(text.parse().unwrap_or_else(|_| external_name_id(text)))
+        }
         BindingTarget::External(name) => Some(external_name_id(name)),
         BindingTarget::Value(_) | BindingTarget::Unresolved(_) => None,
     }
