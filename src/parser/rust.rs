@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -64,6 +65,7 @@ pub fn filter_file(parsed: &ParsedRustFile) -> FileAst {
     let mut assignments = Vec::new();
     let mut calls = Vec::new();
     let mut symbols = Vec::new();
+    let mut ids = IdAllocator::default();
 
     for child in named_children(root) {
         collect_top_level(
@@ -74,7 +76,33 @@ pub fn filter_file(parsed: &ParsedRustFile) -> FileAst {
             &mut assignments,
             &mut calls,
             &mut symbols,
+            &mut ids,
         );
+    }
+
+    // Several impl blocks can define a method with the same name on one type
+    // (`impl Debug for X` and `impl Display for X`, or one impl per generic
+    // instantiation). Collect again with those ids disambiguated so each
+    // callable owns only its own facts.
+    let colliding = colliding_ids(&symbols);
+    if !colliding.is_empty() {
+        imports.clear();
+        assignments.clear();
+        calls.clear();
+        symbols.clear();
+        let mut ids = IdAllocator::new(colliding);
+        for child in named_children(root) {
+            collect_top_level(
+                child,
+                &parsed.source,
+                &module_path,
+                &mut imports,
+                &mut assignments,
+                &mut calls,
+                &mut symbols,
+                &mut ids,
+            );
+        }
     }
 
     let module_owner = module_owner_id(&module_path);
@@ -128,6 +156,7 @@ fn collect_top_level(
     assignments: &mut Vec<AssignmentAst>,
     calls: &mut Vec<CallAst>,
     symbols: &mut Vec<SymbolAst>,
+    ids: &mut IdAllocator,
 ) {
     match node.kind() {
         "use_declaration" => imports.extend(import_asts(node, source)),
@@ -143,6 +172,7 @@ fn collect_top_level(
                         assignments,
                         calls,
                         symbols,
+                        ids,
                     );
                 }
             }
@@ -160,11 +190,11 @@ fn collect_top_level(
             }
             calls.extend(top_level_calls_in(node, source));
         }
-        "function_item" => collect_function(node, source, module_path, None, symbols),
+        "function_item" => collect_function(node, source, module_path, None, None, symbols, ids),
         "struct_item" | "enum_item" | "union_item" | "trait_item" => {
-            collect_class(node, source, module_path, symbols);
+            collect_class(node, source, module_path, symbols, ids);
         }
-        "impl_item" => collect_impl(node, source, module_path, symbols),
+        "impl_item" => collect_impl(node, source, module_path, symbols, ids),
         "type_item" => {
             if let Some(name) = node.child_by_field_name("name") {
                 assignments.push(AssignmentAst {
@@ -180,7 +210,13 @@ fn collect_top_level(
     }
 }
 
-fn collect_class(node: Node, source: &str, module_path: &str, symbols: &mut Vec<SymbolAst>) {
+fn collect_class(
+    node: Node,
+    source: &str,
+    module_path: &str,
+    symbols: &mut Vec<SymbolAst>,
+    ids: &mut IdAllocator,
+) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
     };
@@ -217,23 +253,38 @@ fn collect_class(node: Node, source: &str, module_path: &str, symbols: &mut Vec<
     {
         for child in named_children(body) {
             if child.kind() == "function_item" {
-                collect_function(child, source, module_path, Some(&name), symbols);
+                collect_function(child, source, module_path, Some(&name), None, symbols, ids);
             }
         }
     }
 }
 
-fn collect_impl(node: Node, source: &str, module_path: &str, symbols: &mut Vec<SymbolAst>) {
+fn collect_impl(
+    node: Node,
+    source: &str,
+    module_path: &str,
+    symbols: &mut Vec<SymbolAst>,
+    ids: &mut IdAllocator,
+) {
     let Some(type_node) = node.child_by_field_name("type") else {
         return;
     };
     let Some(body) = node.child_by_field_name("body") else {
         return;
     };
+    let impl_signature = impl_signature(node, type_node, source);
     let type_name = type_name(type_node, source);
     for child in named_children(body) {
         if child.kind() == "function_item" {
-            collect_function(child, source, module_path, Some(&type_name), symbols);
+            collect_function(
+                child,
+                source,
+                module_path,
+                Some(&type_name),
+                Some(&impl_signature),
+                symbols,
+                ids,
+            );
         }
     }
 }
@@ -243,7 +294,9 @@ fn collect_function(
     source: &str,
     module_path: &str,
     parent: Option<&str>,
+    impl_signature: Option<&str>,
     symbols: &mut Vec<SymbolAst>,
+    ids: &mut IdAllocator,
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
         return;
@@ -252,7 +305,7 @@ fn collect_function(
     let qualified_name = parent
         .map(|parent| format!("{parent}.{name}"))
         .unwrap_or_else(|| name.clone());
-    let id = format!("{module_path}:{qualified_name}");
+    let id = ids.allocate(format!("{module_path}:{qualified_name}"), impl_signature);
     let body = node.child_by_field_name("body");
     let parameters = node
         .child_by_field_name("parameters")
@@ -982,6 +1035,69 @@ fn module_owner_id(module_path: &str) -> String {
     format!("{module_path}:<module>")
 }
 
+/// Separates a symbol id from its impl disambiguator; also read when lowering
+/// symbols to callable ids.
+pub const IMPL_MARKER: &str = "@impl:";
+
+/// Allocates symbol ids. Ids that collided in a first collection pass get a
+/// `@impl:<impl signature>` suffix (and `~N` if even that repeats); everything else
+/// keeps its plain `module:Type.method` id.
+#[derive(Default)]
+struct IdAllocator {
+    colliding: HashSet<String>,
+    used: HashSet<String>,
+    ordinals: HashMap<String, usize>,
+}
+
+impl IdAllocator {
+    fn new(colliding: HashSet<String>) -> Self {
+        Self {
+            colliding,
+            ..Self::default()
+        }
+    }
+
+    fn allocate(&mut self, base: String, impl_signature: Option<&str>) -> String {
+        if !self.colliding.contains(&base) {
+            return base;
+        }
+        let mut candidate = match impl_signature {
+            Some(signature) => format!("{base}{IMPL_MARKER}{signature}"),
+            None => {
+                let ordinal = self.ordinals.entry(base.clone()).or_insert(0);
+                *ordinal += 1;
+                format!("{base}{IMPL_MARKER}{ordinal}")
+            }
+        };
+        let mut repeat = 1;
+        while !self.used.insert(candidate.clone()) {
+            repeat += 1;
+            candidate = format!("{base}{IMPL_MARKER}{}~{repeat}", impl_signature.unwrap_or(""));
+        }
+        candidate
+    }
+}
+
+fn colliding_ids(symbols: &[SymbolAst]) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    symbols
+        .iter()
+        .filter(|symbol| !seen.insert(symbol.id.as_str()))
+        .map(|symbol| symbol.id.clone())
+        .collect()
+}
+
+/// `Trait for Type<Args>` (or just `Type<Args>` for inherent impls), with
+/// whitespace normalized.
+fn impl_signature(impl_node: Node, type_node: Node, source: &str) -> String {
+    let ty = text(type_node, source);
+    let signature = match impl_node.child_by_field_name("trait") {
+        Some(trait_node) => format!("{} for {ty}", text(trait_node, source)),
+        None => ty,
+    };
+    signature.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn qualified_symbol_name(symbol: &SymbolAst) -> String {
     symbol
         .parent
@@ -1136,6 +1252,63 @@ mod tests {
         let parsed = parse_rust_tree(path.to_string(), source.to_string())
             .expect("parse Rust fixture");
         filter_file(&parsed)
+    }
+
+    #[test]
+    fn colliding_impl_methods_get_unique_ids_and_own_facts() {
+        let file = parse(
+            "sample.rs",
+            r#"
+struct Wrapper<T>(T);
+struct Plain;
+
+impl fmt::Debug for Wrapper<A> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let first = 1;
+        write(f, first)
+    }
+}
+
+impl fmt::Debug for Wrapper<B> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let second = 2;
+        write(f, second)
+    }
+}
+
+impl fmt::Display for Wrapper<A> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write(f, 3)
+    }
+}
+
+impl Plain {
+    fn only(&self) {}
+}
+"#,
+        );
+        let ids = file
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == SymbolKind::Method)
+            .map(|symbol| symbol.id.as_str())
+            .collect::<Vec<_>>();
+        let unique = ids.iter().collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(unique.len(), ids.len(), "ids must be unique: {ids:?}");
+        // Non-colliding methods keep their plain id.
+        assert!(ids.contains(&"sample:Plain.only"));
+
+        // Each fmt owns only its own definitions.
+        for symbol in file.symbols.iter().filter(|symbol| symbol.name == "fmt") {
+            let owned = file
+                .definitions
+                .iter()
+                .filter(|definition| definition.owner_id == symbol.id)
+                .filter(|definition| matches!(definition.text.as_str(), "first" | "second"))
+                .count();
+            assert!(owned <= 1, "{} owns {owned} locals", symbol.id);
+        }
     }
 
     #[test]

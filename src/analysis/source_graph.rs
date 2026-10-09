@@ -327,7 +327,14 @@ where
         module_path: &str,
     ) {
         let qualified_name = symbol_qualified_name(module_path, symbol);
-        let callable_id = qualified_name.clone();
+        // Rust symbol ids carry an impl disambiguator when several impls define
+        // the same method on one type; keep their callables distinct.
+        let callable_id = match symbol.id.split_once(crate::parser::rust::IMPL_MARKER) {
+            Some((_, disambiguator)) => {
+                format!("{qualified_name}{}{disambiguator}", crate::parser::rust::IMPL_MARKER)
+            }
+            None => qualified_name.clone(),
+        };
         let parent_scope_id = symbol
             .parent
             .as_ref()
