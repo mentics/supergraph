@@ -37,6 +37,15 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
+macro_rules! for_each_index {
+    ($graph:expr, [$($f:ident),*]) => {
+        $(
+            let live = LIVE.load(Relaxed);
+            drop(std::mem::take(&mut $graph.indexes.$f));
+            println!("  idx {:<36} {:>8.1} MB", stringify!($f), mb(live - LIVE.load(Relaxed)));
+        )*
+    };
+}
 fn mb(bytes: usize) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
@@ -55,6 +64,10 @@ fn main() -> anyhow::Result<()> {
         std::mem::size_of::<supergraph::supergraph::GraphEdge>(),
         std::mem::size_of::<supergraph::supergraph::Evidence>(),
     );
+    {
+        let mut graph = graph.clone();
+    for_each_index!(graph, [node_position_by_id, edge_position_by_id, nodes_by_kind, edges_by_kind, nodes_by_uncertainty, edges_by_uncertainty, outgoing_edges_by_node, incoming_edges_by_node, source_span_to_nodes, artifact_to_nodes, callable_to_nodes, owner_to_nodes, owner_to_edges, symbol_to_definitions, symbol_to_uses, requirement_to_code, code_to_requirements, requirement_to_domain_knowledge, domain_knowledge_to_requirements, calls_by_caller, calls_by_concrete_target, call_site_to_calls, caller_to_concrete_target_calls, caller_to_concrete_call_targets]);
+    }
     let live = LIVE.load(Relaxed);
     let indexes = std::mem::take(&mut graph.indexes);
     drop(indexes);

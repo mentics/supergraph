@@ -7,8 +7,9 @@ use std::{
 use crate::ast::SourceSpan;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
+use super::multimap::MultiMap;
 use super::ids::{
-    EdgeId, FactId, IdPart, PayloadHash, Tag, callable_id_from_text, with_legacy_id_text,
+    EdgeId, FactId, IdMap, IdPart, PayloadHash, Tag, callable_id_from_text, with_legacy_id_text,
 };
 use crate::id_parts;
 use std::num::NonZeroU64;
@@ -130,7 +131,7 @@ impl ProgramSupergraphBuilder {
             confidence,
             uncertainty: Uncertainty::Exact,
             evidence,
-            fact: NodeFact::Scope(scope),
+            fact: NodeFact::Scope(Box::new(scope)),
         });
         node_id
     }
@@ -186,7 +187,7 @@ impl ProgramSupergraphBuilder {
             confidence,
             uncertainty: Uncertainty::Exact,
             evidence,
-            fact: NodeFact::Callable(callable),
+            fact: NodeFact::Callable(Box::new(callable)),
         });
         node_id
     }
@@ -222,7 +223,7 @@ impl ProgramSupergraphBuilder {
             confidence,
             uncertainty: Uncertainty::Exact,
             evidence,
-            fact: NodeFact::CallSite(call_site),
+            fact: NodeFact::CallSite(Box::new(call_site)),
         });
         node_id
     }
@@ -265,7 +266,7 @@ impl ProgramSupergraphBuilder {
             span,
             confidence,
             evidence,
-            NodeFact::Statement(statement),
+            NodeFact::Statement(Box::new(statement)),
         )
     }
 
@@ -285,7 +286,7 @@ impl ProgramSupergraphBuilder {
             span,
             confidence,
             evidence,
-            NodeFact::Expression(expression),
+            NodeFact::Expression(Box::new(expression)),
         )
     }
 
@@ -305,7 +306,7 @@ impl ProgramSupergraphBuilder {
             span,
             confidence,
             evidence,
-            NodeFact::Condition(condition),
+            NodeFact::Condition(Box::new(condition)),
         )
     }
 
@@ -405,7 +406,7 @@ impl ProgramSupergraphBuilder {
             span,
             confidence,
             evidence,
-            NodeFact::BasicBlock(basic_block),
+            NodeFact::BasicBlock(Box::new(basic_block)),
         )
     }
 
@@ -425,7 +426,7 @@ impl ProgramSupergraphBuilder {
             span,
             confidence,
             evidence,
-            NodeFact::DomainKnowledge(domain_knowledge),
+            NodeFact::DomainKnowledge(Box::new(domain_knowledge)),
         )
     }
 
@@ -1228,6 +1229,65 @@ pub fn sort_graph(graph: &mut ProgramSupergraph) {
     });
 }
 
+#[derive(Default)]
+struct IndexScratch {
+    node_position_by_id: IdMap<NodeId, u32>,
+    edge_position_by_id: IdMap<EdgeId, u32>,
+    nodes_by_kind: BTreeMap<NodeKind, Vec<NodeId>>,
+    edges_by_kind: BTreeMap<EdgeKind, Vec<EdgeId>>,
+    nodes_by_uncertainty: BTreeMap<Uncertainty, Vec<NodeId>>,
+    edges_by_uncertainty: BTreeMap<Uncertainty, Vec<EdgeId>>,
+    outgoing_edges_by_node: BTreeMap<NodeId, Vec<EdgeId>>,
+    incoming_edges_by_node: BTreeMap<NodeId, Vec<EdgeId>>,
+    source_span_to_nodes: BTreeMap<SourceSpanIndexKey, Vec<NodeId>>,
+    artifact_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
+    callable_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
+    owner_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
+    owner_to_edges: BTreeMap<NodeId, Vec<EdgeId>>,
+    symbol_to_definitions: BTreeMap<NodeId, Vec<NodeId>>,
+    symbol_to_uses: BTreeMap<NodeId, Vec<NodeId>>,
+    requirement_to_code: BTreeMap<NodeId, Vec<NodeId>>,
+    code_to_requirements: BTreeMap<NodeId, Vec<NodeId>>,
+    requirement_to_domain_knowledge: BTreeMap<NodeId, Vec<NodeId>>,
+    domain_knowledge_to_requirements: BTreeMap<NodeId, Vec<NodeId>>,
+    calls_by_caller: BTreeMap<NodeId, Vec<EdgeId>>,
+    calls_by_concrete_target: BTreeMap<NodeId, Vec<EdgeId>>,
+    call_site_to_calls: BTreeMap<NodeId, Vec<EdgeId>>,
+    caller_to_concrete_target_calls: BTreeMap<NodeId, BTreeMap<NodeId, Vec<EdgeId>>>,
+    caller_to_concrete_call_targets: BTreeMap<NodeId, Vec<NodeId>>,
+}
+
+impl IndexScratch {
+    fn finish(self) -> GraphIndexes {
+        GraphIndexes {
+            node_position_by_id: self.node_position_by_id,
+            edge_position_by_id: self.edge_position_by_id,
+            nodes_by_kind: MultiMap::from_btree(self.nodes_by_kind),
+            edges_by_kind: MultiMap::from_btree(self.edges_by_kind),
+            nodes_by_uncertainty: MultiMap::from_btree(self.nodes_by_uncertainty),
+            edges_by_uncertainty: MultiMap::from_btree(self.edges_by_uncertainty),
+            outgoing_edges_by_node: MultiMap::from_btree(self.outgoing_edges_by_node),
+            incoming_edges_by_node: MultiMap::from_btree(self.incoming_edges_by_node),
+            source_span_to_nodes: MultiMap::from_btree(self.source_span_to_nodes),
+            artifact_to_nodes: MultiMap::from_btree(self.artifact_to_nodes),
+            callable_to_nodes: MultiMap::from_btree(self.callable_to_nodes),
+            owner_to_nodes: MultiMap::from_btree(self.owner_to_nodes),
+            owner_to_edges: MultiMap::from_btree(self.owner_to_edges),
+            symbol_to_definitions: MultiMap::from_btree(self.symbol_to_definitions),
+            symbol_to_uses: MultiMap::from_btree(self.symbol_to_uses),
+            requirement_to_code: MultiMap::from_btree(self.requirement_to_code),
+            code_to_requirements: MultiMap::from_btree(self.code_to_requirements),
+            requirement_to_domain_knowledge: MultiMap::from_btree(self.requirement_to_domain_knowledge),
+            domain_knowledge_to_requirements: MultiMap::from_btree(self.domain_knowledge_to_requirements),
+            calls_by_caller: MultiMap::from_btree(self.calls_by_caller),
+            calls_by_concrete_target: MultiMap::from_btree(self.calls_by_concrete_target),
+            call_site_to_calls: MultiMap::from_btree(self.call_site_to_calls),
+            caller_to_concrete_target_calls: self.caller_to_concrete_target_calls,
+            caller_to_concrete_call_targets: MultiMap::from_btree(self.caller_to_concrete_call_targets),
+        }
+    }
+}
+
 pub fn build_indexes(nodes: &[GraphNode], edges: &[GraphEdge]) -> GraphIndexes {
     // Each group fills a disjoint set of maps, so the groups can be built concurrently.
     let (node_a, node_b, node_c, node_d, edge_p, edge_a, edge_o, edge_i, edge_c) = std::thread::scope(|scope| {
@@ -1268,8 +1328,6 @@ pub fn build_indexes(nodes: &[GraphNode], edges: &[GraphEdge]) -> GraphIndexes {
         owner_to_edges: edge_a.owner_to_edges,
         outgoing_edges_by_node: edge_o.outgoing_edges_by_node,
         incoming_edges_by_node: edge_i.incoming_edges_by_node,
-        outgoing_edges_by_node_and_kind: edge_o.outgoing_edges_by_node_and_kind,
-        incoming_edges_by_node_and_kind: edge_i.incoming_edges_by_node_and_kind,
         requirement_to_code: edge_c.requirement_to_code,
         code_to_requirements: edge_c.code_to_requirements,
         requirement_to_domain_knowledge: edge_c.requirement_to_domain_knowledge,
@@ -1284,13 +1342,13 @@ pub fn build_indexes(nodes: &[GraphNode], edges: &[GraphEdge]) -> GraphIndexes {
 
 /// Builds the node-derived maps of one group (0..=3); every other map stays empty.
 fn build_node_indexes(nodes: &[GraphNode], group: u8) -> GraphIndexes {
-    let mut indexes = GraphIndexes::default();
+    let mut indexes = IndexScratch::default();
     for (position, node) in nodes.iter().enumerate() {
         match group {
             0 => {
                 indexes
                     .node_position_by_id
-                    .insert(node.node_id.clone(), position);
+                    .insert(node.node_id.clone(), position as u32);
                 indexes
                     .nodes_by_kind
                     .entry(node.kind)
@@ -1355,18 +1413,18 @@ fn build_node_indexes(nodes: &[GraphNode], group: u8) -> GraphIndexes {
         }
     }
     dedup_indexes(&mut indexes);
-    indexes
+    indexes.finish()
 }
 
 /// Builds the edge-derived maps of one group (0..=4); every other map stays empty.
 fn build_edge_indexes(edges: &[GraphEdge], group: u8) -> GraphIndexes {
-    let mut indexes = GraphIndexes::default();
+    let mut indexes = IndexScratch::default();
     for (position, edge) in edges.iter().enumerate() {
         match group {
             0 => {
                 indexes
                     .edge_position_by_id
-                    .insert(edge.edge_id.clone(), position);
+                    .insert(edge.edge_id.clone(), position as u32);
             }
             1 => {
                 indexes
@@ -1387,26 +1445,12 @@ fn build_edge_indexes(edges: &[GraphEdge], group: u8) -> GraphIndexes {
                     .entry(edge.source_id.clone())
                     .or_default()
                     .push(edge.edge_id.clone());
-                indexes
-                    .outgoing_edges_by_node_and_kind
-                    .entry(edge.source_id.clone())
-                    .or_default()
-                    .entry(edge.kind)
-                    .or_default()
-                    .push(edge.edge_id.clone());
             }
             3 => {
                 if let Some(target_id) = &edge.target_id {
                     indexes
                         .incoming_edges_by_node
                         .entry(target_id.clone())
-                        .or_default()
-                        .push(edge.edge_id.clone());
-                    indexes
-                        .incoming_edges_by_node_and_kind
-                        .entry(target_id.clone())
-                        .or_default()
-                        .entry(edge.kind)
                         .or_default()
                         .push(edge.edge_id.clone());
                 }
@@ -1473,18 +1517,16 @@ fn build_edge_indexes(edges: &[GraphEdge], group: u8) -> GraphIndexes {
         }
     }
     dedup_indexes(&mut indexes);
-    indexes
+    indexes.finish()
 }
 
-pub fn dedup_indexes(indexes: &mut GraphIndexes) {
+fn dedup_indexes(indexes: &mut IndexScratch) {
     dedup_index(&mut indexes.nodes_by_kind);
     dedup_index(&mut indexes.edges_by_kind);
     dedup_index(&mut indexes.nodes_by_uncertainty);
     dedup_index(&mut indexes.edges_by_uncertainty);
     dedup_index(&mut indexes.outgoing_edges_by_node);
     dedup_index(&mut indexes.incoming_edges_by_node);
-    dedup_nested_index(&mut indexes.outgoing_edges_by_node_and_kind);
-    dedup_nested_index(&mut indexes.incoming_edges_by_node_and_kind);
     dedup_index(&mut indexes.source_span_to_nodes);
     dedup_index(&mut indexes.artifact_to_nodes);
     dedup_index(&mut indexes.callable_to_nodes);
@@ -2196,8 +2238,14 @@ mod tests {
         callable_node.payload_hash = None;
 
         let json = serde_json::to_string(&graph).expect("serialize graph");
+        assert!(!json.contains("\"indexes\""), "indexes are rebuilt on load, not serialized");
+        let key = serde_json::to_string(&SourceSpanIndexKey {
+            artifact_id: Some(test_id("artifact:main")),
+            span: span(10, 25),
+        })
+        .expect("serialize span key");
         assert!(
-            json.contains("\\u001f"),
+            key.contains("\\u001f"),
             "source span index keys should use the documented unit separator encoding"
         );
 
@@ -2559,22 +2607,16 @@ mod tests {
                 "{kind:?} should be indexed by stable subject id"
             );
             assert!(
-                roundtrip
-                    .indexes
-                    .outgoing_edges_by_node_and_kind
-                    .get(&edge.source_id)
-                    .and_then(|edges_by_kind| edges_by_kind.get(&kind))
-                    .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == &id)),
+                crate::supergraph::views::indexed_outgoing_edges_by_kind(&roundtrip, edge.source_id, kind)
+                    .iter()
+                    .any(|candidate| candidate.edge_id == id),
                 "{kind:?} should be indexed by source and family"
             );
             if let Some(target_id) = edge.target_id {
                 assert!(
-                    roundtrip
-                        .indexes
-                        .incoming_edges_by_node_and_kind
-                        .get(&target_id)
-                        .and_then(|edges_by_kind| edges_by_kind.get(&kind))
-                        .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == &id)),
+                    crate::supergraph::views::indexed_incoming_edges_by_kind(&roundtrip, target_id, kind)
+                        .iter()
+                        .any(|candidate| candidate.edge_id == id),
                     "{kind:?} should be indexed by target and family"
                 );
             }
@@ -2622,26 +2664,26 @@ mod tests {
         );
         assert_eq!(
             roundtrip.indexes.symbol_to_definitions.get(&ids.symbol),
-            Some(&vec![ids.definition.clone()])
+            Some(&[ids.definition.clone()][..])
         );
         assert_eq!(
             roundtrip.indexes.symbol_to_uses.get(&ids.symbol),
-            Some(&vec![ids.use_node.clone()])
+            Some(&[ids.use_node.clone()][..])
         );
         assert_eq!(
             roundtrip.indexes.calls_by_caller.get(&ids.callable),
-            Some(&vec![ids.calls.clone()])
+            Some(&[ids.calls.clone()][..])
         );
         assert_eq!(
             roundtrip
                 .indexes
                 .calls_by_concrete_target
                 .get(&ids.external),
-            Some(&vec![ids.calls.clone()])
+            Some(&[ids.calls.clone()][..])
         );
         assert_eq!(
             roundtrip.indexes.call_site_to_calls.get(&ids.call_site),
-            Some(&vec![ids.calls.clone()])
+            Some(&[ids.calls.clone()][..])
         );
         assert_eq!(
             roundtrip
@@ -2653,25 +2695,25 @@ mod tests {
         );
         assert_eq!(
             roundtrip.indexes.requirement_to_code.get(&ids.requirement),
-            Some(&vec![ids.statement.clone()])
+            Some(&[ids.statement.clone()][..])
         );
         assert_eq!(
             roundtrip.indexes.code_to_requirements.get(&ids.statement),
-            Some(&vec![ids.requirement.clone()])
+            Some(&[ids.requirement.clone()][..])
         );
         assert_eq!(
             roundtrip
                 .indexes
                 .requirement_to_domain_knowledge
                 .get(&ids.requirement),
-            Some(&vec![ids.domain.clone()])
+            Some(&[ids.domain.clone()][..])
         );
         assert_eq!(
             roundtrip
                 .indexes
                 .domain_knowledge_to_requirements
                 .get(&ids.domain),
-            Some(&vec![ids.requirement.clone()])
+            Some(&[ids.requirement.clone()][..])
         );
         assert!(
             !roundtrip
@@ -2861,7 +2903,7 @@ mod tests {
             None,
             Confidence::Exact,
             schema_evidence(artifact, "module scope", None),
-            NodeFact::Scope(Scope {
+            NodeFact::Scope(Box::new(Scope {
                 scope_id: scope.clone(),
                 parent_scope_id: None,
                 artifact_id: artifact.clone(),
@@ -2871,7 +2913,7 @@ mod tests {
                 binding_behavior: ScopeBindingBehavior::Boundary,
                 owner_callable_id: None,
                 span: None,
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             binding.clone(),
@@ -2896,7 +2938,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "callable", Some(span)),
-            NodeFact::Callable(Callable {
+            NodeFact::Callable(Box::new(Callable {
                 callable_id: callable.clone(),
                 kind: CallableKind::Function,
                 name: Some(Sym::new("handler")),
@@ -2912,7 +2954,7 @@ mod tests {
                 attributes: vec![Sym::new("entrypoint")],
                 incoming_local_call_count: 0,
                 external_invocation_metadata: vec![Sym::new("route")],
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             call_site.clone(),
@@ -2921,7 +2963,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "call site", Some(span)),
-            NodeFact::CallSite(CallSite {
+            NodeFact::CallSite(Box::new(CallSite {
                 call_site_id: call_site.clone(),
                 artifact_id: artifact.clone(),
                 enclosing_callable_id: callable.clone(),
@@ -2933,7 +2975,7 @@ mod tests {
                 },
                 dispatch_kind: DispatchKind::Direct,
                 context: crate::ast::CallContext::Body,
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             external.clone(),
@@ -2961,7 +3003,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "statement", Some(span)),
-            NodeFact::Statement(Statement {
+            NodeFact::Statement(Box::new(Statement {
                 statement_id: statement.clone(),
                 callable_id: callable.clone(),
                 parent_statement_id: None,
@@ -2970,7 +3012,7 @@ mod tests {
                 child_statement_ids: Vec::new(),
                 expression_ids: vec![expression.clone()],
                 control_effects: Vec::new(),
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             expression.clone(),
@@ -2979,7 +3021,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "expression", Some(span)),
-            NodeFact::Expression(Expression {
+            NodeFact::Expression(Box::new(Expression {
                 expression_id: expression.clone(),
                 callable_id: callable.clone(),
                 statement_id: Some(statement.clone()),
@@ -2995,7 +3037,7 @@ mod tests {
                     literal: Some(ValueLiteral::Integer("25".to_string())),
                     ..Default::default()
                 },
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             condition.clone(),
@@ -3004,7 +3046,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "condition", Some(span)),
-            NodeFact::Condition(Condition {
+            NodeFact::Condition(Box::new(Condition {
                 condition_id: condition.clone(),
                 callable_id: callable.clone(),
                 statement_id: Some(statement.clone()),
@@ -3015,7 +3057,7 @@ mod tests {
                 regions: Vec::new(),
                 continuation: None,
                 fallthrough: FallthroughBehavior::Conditional,
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             symbol.clone(),
@@ -3174,7 +3216,7 @@ mod tests {
             Some(span),
             Confidence::Exact,
             schema_evidence(artifact, "basic block", Some(span)),
-            NodeFact::BasicBlock(BasicBlock {
+            NodeFact::BasicBlock(Box::new(BasicBlock {
                 basic_block_id: basic_block.clone(),
                 callable_id: callable.clone(),
                 kind: BasicBlockKind::StraightLine,
@@ -3182,7 +3224,7 @@ mod tests {
                 statement_ids: vec![statement.clone()],
                 entry_node_id: Some(cfg_entry.clone()),
                 exit_node_id: Some(cfg_exit.clone()),
-            }),
+            })),
         ));
         builder.insert_node(schema_node(
             domain.clone(),
@@ -3191,14 +3233,14 @@ mod tests {
             None,
             Confidence::Probable,
             schema_evidence(artifact, "domain knowledge", None),
-            NodeFact::DomainKnowledge(DomainKnowledge {
+            NodeFact::DomainKnowledge(Box::new(DomainKnowledge {
                 domain_knowledge_id: domain.clone(),
                 scope: DomainKnowledgeScope::Repository,
                 summary: "batch sizes are externally visible".to_string(),
                 source: DomainKnowledgeSource::Documentation,
                 applies_to: vec![requirement.clone()],
                 status: DomainKnowledgeStatus::Stale,
-            }),
+            })),
         ));
         for (id, role, label) in [
             (cfg_entry.clone(), ControlFlowNodeRole::Entry, "entry"),

@@ -47,7 +47,7 @@ fn emit_callable(graph: &mut ProgramSupergraph, semantic: &SemanticCallable<'_>)
                 Some(statement.source_span),
                 Confidence::Exact,
                 evidence,
-                NodeFact::Statement(sg::Statement {
+                NodeFact::Statement(Box::new(sg::Statement {
                     statement_id,
                     callable_id: semantic.callable().callable_id,
                     parent_statement_id,
@@ -56,7 +56,7 @@ fn emit_callable(graph: &mut ProgramSupergraph, semantic: &SemanticCallable<'_>)
                     child_statement_ids: child_ids.get(&index).cloned().unwrap_or_default(),
                     expression_ids: Vec::new(),
                     control_effects: Vec::new(),
-                }),
+                })),
             ),
         );
     }

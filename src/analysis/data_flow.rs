@@ -1498,7 +1498,7 @@ fn expressions_for_callable(
     let mut expressions = index
         .nodes(graph, callable_id)
         .filter_map(|node| match &node.fact {
-            NodeFact::Expression(expression) => Some(expression.clone()),
+            NodeFact::Expression(expression) => Some(expression.as_ref().clone()),
             _ => None,
         })
         .collect::<Vec<_>>();

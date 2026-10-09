@@ -1481,7 +1481,7 @@ fn insert_basic_block_node(
             Some(span),
             Confidence::Exact,
             inference_evidence("compact straight-line CFG basic block"),
-            NodeFact::BasicBlock(sg::BasicBlock {
+            NodeFact::BasicBlock(Box::new(sg::BasicBlock {
                 basic_block_id: node_id,
                 callable_id: semantic.callable().callable_id,
                 kind: BasicBlockKind::StraightLine,
@@ -1489,7 +1489,7 @@ fn insert_basic_block_node(
                 statement_ids: statement_ids.to_vec(),
                 entry_node_id: Some(first.cfg_node_id),
                 exit_node_id: Some(last.cfg_node_id),
-            }),
+            })),
         ),
     );
 }

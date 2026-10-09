@@ -254,7 +254,7 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
                     scope_kind_key(planned.kind),
                     "normalized lexical scope fact",
                 ),
-                NodeFact::Scope(sg::Scope {
+                NodeFact::Scope(Box::new(sg::Scope {
                     scope_id: planned.scope_id.clone(),
                     parent_scope_id: parent_scope_id.clone(),
                     artifact_id: planned.artifact_id.clone(),
@@ -268,7 +268,7 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
                     binding_behavior,
                     owner_callable_id: planned.owner_callable_id.clone(),
                     span: planned.span,
-                }),
+                })),
             ));
         if inserted {
             scopes_by_artifact
@@ -841,7 +841,7 @@ mod tests {
             .nodes
             .iter()
             .filter_map(|node| match &node.fact {
-                NodeFact::Scope(scope) => Some(scope),
+                NodeFact::Scope(scope) => Some(scope.as_ref()),
                 _ => None,
             })
             .collect()

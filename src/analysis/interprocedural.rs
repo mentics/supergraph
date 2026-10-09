@@ -68,13 +68,13 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
     for node in &graph.nodes {
         match &node.fact {
             NodeFact::Callable(callable) => {
-                callables.insert(callable.callable_id.clone(), callable.clone());
+                callables.insert(callable.callable_id.clone(), callable.as_ref().clone());
             }
             NodeFact::CallSite(call_site) => {
-                call_sites.insert(call_site.call_site_id.clone(), call_site.clone());
+                call_sites.insert(call_site.call_site_id.clone(), call_site.as_ref().clone());
             }
             NodeFact::Expression(expression) => {
-                expressions_by_id.insert(expression.expression_id.clone(), expression.clone());
+                expressions_by_id.insert(expression.expression_id.clone(), expression.as_ref().clone());
             }
             NodeFact::Value(value) => {
                 values_by_id.insert(value.value_id.clone(), value.clone());
@@ -3483,7 +3483,7 @@ mod tests {
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller try statement"),
-            fact: NodeFact::Statement(sg::Statement {
+            fact: NodeFact::Statement(Box::new(sg::Statement {
                 statement_id: tid(call_statement_id),
                 callable_id: tid("callable:caller"),
                 parent_statement_id: None,
@@ -3492,7 +3492,7 @@ mod tests {
                 child_statement_ids: Vec::new(),
                 expression_ids: Vec::new(),
                 control_effects: Vec::new(),
-            }),
+            })),
         });
         graph.nodes.push(GraphNode {
             node_id: tid(handler_statement_id),
@@ -3504,7 +3504,7 @@ mod tests {
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller handler statement"),
-            fact: NodeFact::Statement(sg::Statement {
+            fact: NodeFact::Statement(Box::new(sg::Statement {
                 statement_id: tid(handler_statement_id),
                 callable_id: tid("callable:caller"),
                 parent_statement_id: None,
@@ -3513,7 +3513,7 @@ mod tests {
                 child_statement_ids: Vec::new(),
                 expression_ids: Vec::new(),
                 control_effects: Vec::new(),
-            }),
+            })),
         });
         graph.nodes.push(GraphNode {
             node_id: tid("condition:caller:try"),
@@ -3525,7 +3525,7 @@ mod tests {
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller exception region"),
-            fact: NodeFact::Condition(sg::Condition {
+            fact: NodeFact::Condition(Box::new(sg::Condition {
                 condition_id: tid("condition:caller:try"),
                 callable_id: tid("callable:caller"),
                 statement_id: None,
@@ -3556,7 +3556,7 @@ mod tests {
                 ],
                 continuation: None,
                 fallthrough: sg::FallthroughBehavior::Conditional,
-            }),
+            })),
         });
         add_cfg_node(
             graph,
@@ -3841,7 +3841,7 @@ mod tests {
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-083 test expression"),
-            fact: NodeFact::Expression(sg::Expression {
+            fact: NodeFact::Expression(Box::new(sg::Expression {
                 expression_id: tid(expression_id),
                 callable_id: tid("callable:callee"),
                 statement_id: None,
@@ -3859,7 +3859,7 @@ mod tests {
                     member: (member.map(str::to_string)).map(Sym::from),
                     literal: None,
                 },
-            }),
+            })),
         }
     }
 
@@ -3917,7 +3917,7 @@ mod tests {
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: Vec::new(),
-            fact: NodeFact::CallSite(sg::CallSite {
+            fact: NodeFact::CallSite(Box::new(sg::CallSite {
                 call_site_id: tid(call_site_id),
                 artifact_id: owner.artifact_id.clone().expect("artifact owner"),
                 enclosing_callable_id: tid("callable:caller"),
@@ -3926,7 +3926,7 @@ mod tests {
                 argument_shape,
                 dispatch_kind,
                 context: CallContext::Body,
-            }),
+            })),
         }
     }
 

@@ -410,7 +410,7 @@ fn indexed_control_flow_nodes(graph: &ProgramSupergraph) -> Vec<&sg::GraphNode> 
                     .indexes
                     .node_position_by_id
                     .get(node_id)
-                    .and_then(|position| graph.nodes.get(*position))
+                    .and_then(|position| graph.nodes.get(*position as usize))
             })
             .collect();
     }
@@ -430,7 +430,7 @@ fn indexed_control_flow_edges(graph: &ProgramSupergraph) -> Vec<&sg::GraphEdge> 
                     .indexes
                     .edge_position_by_id
                     .get(edge_id)
-                    .and_then(|position| graph.edges.get(*position))
+                    .and_then(|position| graph.edges.get(*position as usize))
             })
             .collect();
     }

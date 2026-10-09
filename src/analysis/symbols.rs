@@ -2021,7 +2021,7 @@ mod tests {
             .indexes
             .call_site_to_calls
             .values()
-            .map(Vec::len)
+            .map(<[_]>::len)
             .sum::<usize>();
         assert_eq!(
             call_site_index_count, canonical_call_count,

@@ -583,20 +583,19 @@ fn add_data_flow_edges_for_endpoint(
     .flat_map(|kind| {
         graph
             .indexes
-            .outgoing_edges_by_node_and_kind
+            .outgoing_edges_by_node
             .get(&endpoint_id)
-            .and_then(|edges_by_kind| edges_by_kind.get(&kind))
             .into_iter()
             .flatten()
             .chain(
                 graph
                     .indexes
-                    .incoming_edges_by_node_and_kind
+                    .incoming_edges_by_node
                     .get(&endpoint_id)
-                    .and_then(|edges_by_kind| edges_by_kind.get(&kind))
                     .into_iter()
                     .flatten(),
             )
+            .filter(move |edge_id| edge_by_id(graph, **edge_id).is_some_and(|edge| edge.kind == kind))
     }) {
         add_dependency(
             dependencies,
@@ -626,7 +625,7 @@ fn node_by_id(graph: &ProgramSupergraph, node_id: NodeId) -> Option<&GraphNode> 
         .indexes
         .node_position_by_id
         .get(&node_id)
-        .and_then(|position| graph.nodes.get(*position))
+        .and_then(|position| graph.nodes.get(*position as usize))
 }
 
 fn edge_by_id(graph: &ProgramSupergraph, edge_id: EdgeId) -> Option<&GraphEdge> {
@@ -634,7 +633,7 @@ fn edge_by_id(graph: &ProgramSupergraph, edge_id: EdgeId) -> Option<&GraphEdge> 
         .indexes
         .edge_position_by_id
         .get(&edge_id)
-        .and_then(|position| graph.edges.get(*position))
+        .and_then(|position| graph.edges.get(*position as usize))
 }
 
 fn add_dependency(

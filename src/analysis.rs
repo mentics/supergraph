@@ -211,6 +211,7 @@ pub fn enrich_supergraph_with_semantic_flows(
     timing::stage("pass: fact identity hashes", || refresh_fact_identity(&mut graph));
     timing::stage("pass: sort graph", || sort_graph(&mut graph));
     graph.indexes = timing::stage("build indexes", || build_indexes(&graph.nodes, &graph.edges));
+    graph.invalidate_id_cache();
     graph
 }
 
@@ -236,9 +237,9 @@ impl<'a> SemanticContext<'a> {
                     artifacts_by_module.insert(artifact.module_path.clone(), artifact.clone());
                     artifacts_by_path.insert(artifact.path.clone(), artifact.clone());
                 }
-                NodeFact::Callable(callable) => callables.push(callable.clone()),
+                NodeFact::Callable(callable) => callables.push(callable.as_ref().clone()),
                 NodeFact::CallSite(call_site) => {
-                    call_sites_by_key.insert(call_site_key(call_site), call_site.clone());
+                    call_sites_by_key.insert(call_site_key(call_site), call_site.as_ref().clone());
                 }
                 _ => {}
             }

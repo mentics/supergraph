@@ -98,7 +98,7 @@ impl CallResolutionSnapshot {
         for node in &graph.nodes {
             node_kinds.insert(node.node_id.clone(), node.kind);
             if let NodeFact::CallSite(call_site) = &node.fact {
-                call_sites.insert(call_site.call_site_id.clone(), call_site.clone());
+                call_sites.insert(call_site.call_site_id.clone(), call_site.as_ref().clone());
             }
         }
 
@@ -354,7 +354,7 @@ mod tests {
         node(
             id,
             NodeKind::Callable,
-            NodeFact::Callable(sg::Callable {
+            NodeFact::Callable(Box::new(sg::Callable {
                 callable_id: test_id(id),
                 kind: sg::CallableKind::Function,
                 name: Some(Sym::from(id.to_string())),
@@ -370,7 +370,7 @@ mod tests {
                 attributes: Vec::new(),
                 incoming_local_call_count: 0,
                 external_invocation_metadata: Vec::new(),
-            }),
+            })),
         )
     }
 
@@ -411,7 +411,7 @@ mod tests {
         node(
             id,
             NodeKind::CallSite,
-            NodeFact::CallSite(sg::CallSite {
+            NodeFact::CallSite(Box::new(sg::CallSite {
                 call_site_id: test_id(id),
                 artifact_id: test_id("artifact"),
                 enclosing_callable_id: test_id("caller"),
@@ -423,7 +423,7 @@ mod tests {
                 },
                 dispatch_kind,
                 context: CallContext::Body,
-            }),
+            })),
         )
     }
 

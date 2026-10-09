@@ -79,7 +79,7 @@ fn emit_callable(
                 Some(expression.source_span),
                 confidence,
                 parser_evidence(semantic, expression, "normalized expression fact"),
-                NodeFact::Expression(sg::Expression {
+                NodeFact::Expression(Box::new(sg::Expression {
                     expression_id,
                     callable_id: semantic.callable().callable_id,
                     statement_id,
@@ -91,7 +91,7 @@ fn emit_callable(
                     value_id: None,
                     original_text: Some(Sym::from(expression.text.clone())),
                     normalized: normalized_expression(semantic, expression),
-                }),
+                })),
             ),
         );
     }
@@ -546,7 +546,7 @@ mod tests {
             .nodes
             .iter()
             .filter_map(|node| match &node.fact {
-                NodeFact::Expression(expression) => Some((node, expression)),
+                NodeFact::Expression(expression) => Some((node, expression.as_ref())),
                 _ => None,
             })
             .collect::<Vec<_>>();

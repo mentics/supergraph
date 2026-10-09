@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod ids;
 pub mod invalidation;
+pub mod multimap;
 pub mod schema;
 pub mod views;
 

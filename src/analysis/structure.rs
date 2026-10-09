@@ -136,7 +136,7 @@ fn emit_condition_region(
                 condition_kind_key(kind),
                 "structured branch/loop region fact",
             ),
-            NodeFact::Condition(sg::Condition {
+            NodeFact::Condition(Box::new(sg::Condition {
                 condition_id: condition_id,
                 callable_id: semantic.callable().callable_id,
                 statement_id: Some(controller.statement_id),
@@ -147,7 +147,7 @@ fn emit_condition_region(
                 regions,
                 continuation,
                 fallthrough,
-            }),
+            })),
         ),
     );
     Some(condition_id)
@@ -189,7 +189,7 @@ fn emit_exception_region(
                 "exception-region",
                 "structured try/catch/finally region fact",
             ),
-            NodeFact::Condition(sg::Condition {
+            NodeFact::Condition(Box::new(sg::Condition {
                 condition_id: condition_id,
                 callable_id: semantic.callable().callable_id,
                 statement_id: Some(statement.statement_id),
@@ -209,7 +209,7 @@ fn emit_exception_region(
                 regions,
                 continuation: continuation_for_exception(statement, statements),
                 fallthrough: FallthroughBehavior::Conditional,
-            }),
+            })),
         ),
     );
     Some(condition_id)
@@ -637,7 +637,7 @@ fn condition_fact<'a>(
         .node_position(condition_id)
         .and_then(|position| match &graph.nodes[position].fact {
             NodeFact::Condition(condition) if condition.condition_id == condition_id => {
-                Some(condition)
+                Some(condition.as_ref())
             }
             _ => None,
         })
@@ -898,7 +898,7 @@ mod tests {
             .nodes
             .iter()
             .filter_map(|node| match &node.fact {
-                NodeFact::Statement(statement) => Some(statement),
+                NodeFact::Statement(statement) => Some(statement.as_ref()),
                 _ => None,
             })
             .collect()

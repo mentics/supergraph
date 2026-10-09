@@ -9,22 +9,51 @@ pub const SCHEMA_VERSION: &str = "program-supergraph.v2";
 pub const DOMAIN_KNOWLEDGE_RECORD_SCHEMA_VERSION: &str = "domain-knowledge-record.v1";
 
 pub use super::ids::{EdgeId, FactId, NodeId, PayloadHash};
-use super::ids::IdSet;
+use super::ids::{IdMap, IdSet};
+use super::multimap::MultiMap;
 
 /// Free-form identifier used by persisted domain-knowledge records (not a graph id).
 pub type StableId = String;
 pub type SubjectId = StableId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "ProgramSupergraphWire")]
 pub struct ProgramSupergraph {
     pub schema_version: String,
     pub language: String,
     pub root: String,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    /// Derived lookup tables; never serialized, rebuilt on load.
+    #[serde(skip)]
     pub indexes: GraphIndexes,
     #[serde(skip)]
     pub(crate) id_cache: IdCache,
+}
+
+/// Wire form read by `ProgramSupergraph::deserialize`; any stored `indexes` are ignored.
+#[derive(Deserialize)]
+struct ProgramSupergraphWire {
+    schema_version: String,
+    language: String,
+    root: String,
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+}
+
+impl From<ProgramSupergraphWire> for ProgramSupergraph {
+    fn from(wire: ProgramSupergraphWire) -> Self {
+        let indexes = crate::supergraph::builder::build_indexes(&wire.nodes, &wire.edges);
+        Self {
+            schema_version: wire.schema_version,
+            language: wire.language,
+            root: wire.root,
+            nodes: wire.nodes,
+            edges: wire.edges,
+            indexes,
+            id_cache: IdCache::default(),
+        }
+    }
 }
 
 /// Lazily built membership sets that make `insert_node`/`insert_edge` O(1).
@@ -50,7 +79,7 @@ impl Eq for IdCache {}
 
 impl ProgramSupergraph {
     /// Writes the compact JSON form, byte-identical to `serde_json::to_writer(self)`, but
-    /// serializes nodes, edges and indexes on separate threads.
+    /// serializes nodes and edges on separate threads.
     pub fn write_json<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<()> {
         fn to_error(error: serde_json::Error) -> std::io::Error {
             std::io::Error::other(error)
@@ -80,7 +109,6 @@ impl ProgramSupergraph {
                 .chunks(edge_chunk)
                 .map(|chunk| scope.spawn(move || serialize_chunk(chunk)))
                 .collect::<Vec<_>>();
-            let indexes = scope.spawn(|| serde_json::to_vec(&self.indexes));
 
             out.write_all(b"{\"schema_version\":")?;
             serde_json::to_writer(&mut *out, &self.schema_version)?;
@@ -101,9 +129,6 @@ impl ProgramSupergraph {
                 }
                 out.write_all(b"]")?;
             }
-            out.write_all(b",\"indexes\":")?;
-            let indexes = indexes.join().expect("serializer thread").map_err(to_error)?;
-            out.write_all(&indexes)?;
             out.write_all(b"}")
         })
     }
@@ -233,20 +258,20 @@ pub enum EdgeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeFact {
     Artifact(Artifact),
-    Scope(Scope),
+    Scope(Box<Scope>),
     Binding(Binding),
-    Callable(Callable),
-    CallSite(CallSite),
+    Callable(Box<Callable>),
+    CallSite(Box<CallSite>),
     ExternalTarget(ExternalTarget),
-    Statement(Statement),
-    Expression(Expression),
-    Condition(Condition),
+    Statement(Box<Statement>),
+    Expression(Box<Expression>),
+    Condition(Box<Condition>),
     Symbol(Symbol),
     Definition(Definition),
     Use(Use),
     Value(Value),
-    BasicBlock(BasicBlock),
-    DomainKnowledge(DomainKnowledge),
+    BasicBlock(Box<BasicBlock>),
+    DomainKnowledge(Box<DomainKnowledge>),
     ControlFlow(ControlFlowNode),
     DataFlow(DataFlowNode),
     Requirement(Requirement),
@@ -1622,36 +1647,32 @@ impl<'de> Deserialize<'de> for SourceSpanIndexKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GraphIndexes {
-    pub node_position_by_id: BTreeMap<NodeId, usize>,
-    pub edge_position_by_id: BTreeMap<EdgeId, usize>,
-    pub nodes_by_kind: BTreeMap<NodeKind, Vec<NodeId>>,
-    pub edges_by_kind: BTreeMap<EdgeKind, Vec<EdgeId>>,
-    pub nodes_by_uncertainty: BTreeMap<Uncertainty, Vec<NodeId>>,
-    pub edges_by_uncertainty: BTreeMap<Uncertainty, Vec<EdgeId>>,
-    pub outgoing_edges_by_node: BTreeMap<NodeId, Vec<EdgeId>>,
-    pub incoming_edges_by_node: BTreeMap<NodeId, Vec<EdgeId>>,
-    pub outgoing_edges_by_node_and_kind: BTreeMap<NodeId, BTreeMap<EdgeKind, Vec<EdgeId>>>,
-    pub incoming_edges_by_node_and_kind: BTreeMap<NodeId, BTreeMap<EdgeKind, Vec<EdgeId>>>,
-    pub source_span_to_nodes: BTreeMap<SourceSpanIndexKey, Vec<NodeId>>,
-    pub artifact_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
-    pub callable_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
-    pub owner_to_nodes: BTreeMap<NodeId, Vec<NodeId>>,
-    pub owner_to_edges: BTreeMap<NodeId, Vec<EdgeId>>,
-    pub symbol_to_definitions: BTreeMap<NodeId, Vec<NodeId>>,
-    pub symbol_to_uses: BTreeMap<NodeId, Vec<NodeId>>,
-    pub requirement_to_code: BTreeMap<NodeId, Vec<NodeId>>,
-    pub code_to_requirements: BTreeMap<NodeId, Vec<NodeId>>,
-    #[serde(default)]
-    pub requirement_to_domain_knowledge: BTreeMap<NodeId, Vec<NodeId>>,
-    #[serde(default)]
-    pub domain_knowledge_to_requirements: BTreeMap<NodeId, Vec<NodeId>>,
-    pub calls_by_caller: BTreeMap<NodeId, Vec<EdgeId>>,
-    pub calls_by_concrete_target: BTreeMap<NodeId, Vec<EdgeId>>,
-    pub call_site_to_calls: BTreeMap<NodeId, Vec<EdgeId>>,
+    pub node_position_by_id: IdMap<NodeId, u32>,
+    pub edge_position_by_id: IdMap<EdgeId, u32>,
+    pub nodes_by_kind: MultiMap<NodeKind, NodeId>,
+    pub edges_by_kind: MultiMap<EdgeKind, EdgeId>,
+    pub nodes_by_uncertainty: MultiMap<Uncertainty, NodeId>,
+    pub edges_by_uncertainty: MultiMap<Uncertainty, EdgeId>,
+    pub outgoing_edges_by_node: MultiMap<NodeId, EdgeId>,
+    pub incoming_edges_by_node: MultiMap<NodeId, EdgeId>,
+    pub source_span_to_nodes: MultiMap<SourceSpanIndexKey, NodeId>,
+    pub artifact_to_nodes: MultiMap<NodeId, NodeId>,
+    pub callable_to_nodes: MultiMap<NodeId, NodeId>,
+    pub owner_to_nodes: MultiMap<NodeId, NodeId>,
+    pub owner_to_edges: MultiMap<NodeId, EdgeId>,
+    pub symbol_to_definitions: MultiMap<NodeId, NodeId>,
+    pub symbol_to_uses: MultiMap<NodeId, NodeId>,
+    pub requirement_to_code: MultiMap<NodeId, NodeId>,
+    pub code_to_requirements: MultiMap<NodeId, NodeId>,
+    pub requirement_to_domain_knowledge: MultiMap<NodeId, NodeId>,
+    pub domain_knowledge_to_requirements: MultiMap<NodeId, NodeId>,
+    pub calls_by_caller: MultiMap<NodeId, EdgeId>,
+    pub calls_by_concrete_target: MultiMap<NodeId, EdgeId>,
+    pub call_site_to_calls: MultiMap<NodeId, EdgeId>,
     pub caller_to_concrete_target_calls: BTreeMap<NodeId, BTreeMap<NodeId, Vec<EdgeId>>>,
-    pub caller_to_concrete_call_targets: BTreeMap<NodeId, Vec<NodeId>>,
+    pub caller_to_concrete_call_targets: MultiMap<NodeId, NodeId>,
 }
 
 #[cfg(test)]

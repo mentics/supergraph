@@ -1857,12 +1857,12 @@ pub fn indexed_outgoing_edges_by_kind<'a>(
 ) -> Vec<&'a GraphEdge> {
     graph
         .indexes
-        .outgoing_edges_by_node_and_kind
+        .outgoing_edges_by_node
         .get(&node_id)
-        .and_then(|edges_by_kind| edges_by_kind.get(&kind))
         .into_iter()
         .flatten()
         .filter_map(|edge_id| indexed_edge(graph, *edge_id))
+        .filter(|edge| edge.kind == kind)
         .collect()
 }
 
@@ -1873,12 +1873,12 @@ pub fn indexed_incoming_edges_by_kind<'a>(
 ) -> Vec<&'a GraphEdge> {
     graph
         .indexes
-        .incoming_edges_by_node_and_kind
+        .incoming_edges_by_node
         .get(&node_id)
-        .and_then(|edges_by_kind| edges_by_kind.get(&kind))
         .into_iter()
         .flatten()
         .filter_map(|edge_id| indexed_edge(graph, *edge_id))
+        .filter(|edge| edge.kind == kind)
         .collect()
 }
 
@@ -1887,7 +1887,7 @@ pub fn indexed_node<'a>(graph: &'a ProgramSupergraph, node_id: NodeId) -> Option
         .indexes
         .node_position_by_id
         .get(&node_id)
-        .and_then(|position| graph.nodes.get(*position))
+        .and_then(|position| graph.nodes.get(*position as usize))
         .filter(|node| node.node_id == node_id)
 }
 
@@ -1896,7 +1896,7 @@ pub fn indexed_edge<'a>(graph: &'a ProgramSupergraph, edge_id: sg::EdgeId) -> Op
         .indexes
         .edge_position_by_id
         .get(&edge_id)
-        .and_then(|position| graph.edges.get(*position))
+        .and_then(|position| graph.edges.get(*position as usize))
         .filter(|edge| edge.edge_id == edge_id)
 }
 
