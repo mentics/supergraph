@@ -1,6 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::SourceSpan;
+use crate::id_parts;
+use crate::supergraph::ids::{IdMap, IdPart, IdSet, Tag};
 use crate::supergraph::{
     self as sg, Confidence, ControlFlowNodeRole, ControlRegionKind, DataFlowKind, DiagnosticKind,
     DispatchKind, EdgeFact, EdgeKind, ExpressionKind, NodeFact, NodeId, NodeKind,
@@ -177,7 +179,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
     let parameter_out_summaries = parameter_out_summaries(graph, &values_by_id, &expressions_by_id);
 
     for (edge, calls) in call_edges {
-        let actual_count = actual_argument_count(&call_argument_values, &calls.call_site_id);
+        let actual_count = actual_argument_count(&call_argument_values, calls.call_site_id);
         let Some(callee_id) = calls.callee_callable_id.clone() else {
             if let Some(call_site) = call_sites.get(&calls.call_site_id) {
                 if actual_count > 0 {
@@ -189,7 +191,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                         unavailable_target_reason(&calls),
                     );
                 }
-                if has_receiver_flow_input(call_site, &call_receiver_values, &calls.call_site_id) {
+                if has_receiver_flow_input(call_site, &call_receiver_values, calls.call_site_id) {
                     add_receiver_unavailable_diagnostic(
                         graph,
                         &edge,
@@ -230,7 +232,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                         "resolved callee callable is missing from graph values",
                     );
                 }
-                if has_receiver_flow_input(call_site, &call_receiver_values, &calls.call_site_id) {
+                if has_receiver_flow_input(call_site, &call_receiver_values, calls.call_site_id) {
                     add_receiver_unavailable_diagnostic(
                         graph,
                         &edge,
@@ -291,9 +293,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                         graph,
                         &edge,
                         &calls,
-                        &callee_id,
-                        &argument_value_id,
-                        &parameter_value_id,
+                        callee_id,
+                        argument_value_id,
+                        parameter_value_id,
                         &parameter_name,
                         ordinal,
                         confidence,
@@ -304,9 +306,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                             graph,
                             &edge,
                             &calls,
-                            &callee_id,
-                            &parameter_value_id,
-                            state_value_id,
+                            callee_id,
+                            parameter_value_id,
+                            *state_value_id,
                             &parameter_name,
                             ordinal,
                             &parameter_out_summaries,
@@ -411,9 +413,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                 graph,
                 &edge,
                 &calls,
-                &callee_id,
-                argument_value_id,
-                parameter_value_id,
+                callee_id,
+                *argument_value_id,
+                *parameter_value_id,
                 parameter_name,
                 argument_ordinal,
                 confidence,
@@ -424,9 +426,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                     graph,
                     &edge,
                     &calls,
-                    &callee_id,
-                    parameter_value_id,
-                    state_value_id,
+                    callee_id,
+                    *parameter_value_id,
+                    *state_value_id,
                     parameter_name,
                     argument_ordinal,
                     &parameter_out_summaries,
@@ -458,9 +460,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                         graph,
                         &edge,
                         &calls,
-                        &callee_id,
-                        return_id,
-                        call_result_id,
+                        callee_id,
+                        *return_id,
+                        *call_result_id,
                         confidence,
                         precision,
                     );
@@ -482,7 +484,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
             ),
             (None, true) => {}
         }
-        if let Some(call_exception_id) = call_exception_values.get(&calls.call_site_id) {
+        if let Some(&call_exception_id) = call_exception_values.get(&calls.call_site_id) {
             let callee_exception_values = exception_values
                 .get(&callee_id)
                 .cloned()
@@ -498,20 +500,20 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                 continue;
             }
 
-            for exception_id in &callee_exception_values {
+            for &exception_id in &callee_exception_values {
                 let summary = exception_summary(
                     exception_id,
                     &values_by_id,
-                    value_spans_by_id.get(exception_id).copied(),
+                    value_spans_by_id.get(&exception_id).copied(),
                 );
                 let destinations =
-                    exception_destinations(graph, &callable_index, &callee_id, exception_id, summary.span);
-                for handler_id in &destinations.callee_handlers {
+                    exception_destinations(graph, &callable_index, callee_id, summary.span);
+                for &handler_id in &destinations.callee_handlers {
                     add_throws_to(
                         graph,
                         &edge,
                         &calls,
-                        &callee_id,
+                        callee_id,
                         exception_id,
                         handler_id,
                         Confidence::Exact,
@@ -522,13 +524,13 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                 }
 
                 if destinations.reaches_callee_exceptional_exit {
-                    if let Some(exit_id) = destinations.callee_exceptional_exit.as_deref() {
+                    if let Some(exit_id) = destinations.callee_exceptional_exit {
                         let (confidence, call_precision) = throws_to_confidence(&calls);
                         add_throws_to(
                             graph,
                             &edge,
                             &calls,
-                            &callee_id,
+                            callee_id,
                             exception_id,
                             exit_id,
                             confidence,
@@ -540,7 +542,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                             graph,
                             &edge,
                             &calls,
-                            &callee_id,
+                            callee_id,
                             exception_id,
                             call_exception_id,
                             confidence,
@@ -554,9 +556,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                                     graph,
                                     &edge,
                                     &calls,
-                                    &callee_id,
+                                    callee_id,
                                     exception_id,
-                                    &handler_id,
+                                    handler_id,
                                     confidence,
                                     SG084_CALLER_HANDLER_PRECISION,
                                     sg::ThrowsToTargetKind::Handler,
@@ -568,9 +570,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                                     graph,
                                     &edge,
                                     &calls,
-                                    &callee_id,
+                                    callee_id,
                                     exception_id,
-                                    &exit_id,
+                                    exit_id,
                                     confidence,
                                     SG084_CALLER_EXCEPTIONAL_EXIT_PRECISION,
                                     sg::ThrowsToTargetKind::CallerExceptionalExit,
@@ -604,9 +606,9 @@ fn add_parameter_in(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
     calls: &sg::Calls,
-    callee_id: &str,
-    argument_value_id: &str,
-    parameter_node_id: &str,
+    callee_id: NodeId,
+    argument_value_id: NodeId,
+    parameter_node_id: NodeId,
     parameter_name: &str,
     ordinal: usize,
     confidence: Confidence,
@@ -622,8 +624,8 @@ fn add_parameter_in(
                 &format!("{ordinal}:{precision}"),
             ),
             EdgeKind::ParameterIn,
-            argument_value_id.to_string(),
-            parameter_node_id.to_string(),
+            argument_value_id,
+            parameter_node_id,
             call_edge.owner.clone(),
             call_edge.span,
             confidence,
@@ -631,7 +633,7 @@ fn add_parameter_in(
             EdgeFact::ParameterIn(sg::ParameterIn {
                 call_site_id: calls.call_site_id.clone(),
                 caller_callable_id: calls.caller_callable_id.clone(),
-                callee_callable_id: callee_id.to_string(),
+                callee_callable_id: callee_id,
                 parameter_name: parameter_name.to_string(),
                 ordinal,
                 precision: precision.to_string(),
@@ -675,7 +677,7 @@ fn parameter_out_summaries(
         let Some(kind) = direct_mutation_kind(edge.data_flow) else {
             continue;
         };
-        let Some(target_id) = edge.edge.target_id.as_deref() else {
+        let Some(target_id) = edge.edge.target_id else {
             continue;
         };
         let Some((callable_id, base_name)) =
@@ -686,12 +688,12 @@ fn parameter_out_summaries(
         let Some(formal_value_id) = formal_values.get(&(callable_id, base_name)).cloned() else {
             continue;
         };
-        direct_writes.insert(target_id.to_string(), (formal_value_id.clone(), kind));
+        direct_writes.insert(target_id, (formal_value_id, kind));
         summaries
             .entry(formal_value_id)
             .or_default()
             .push(ParameterOutSummary {
-                access_value_id: target_id.to_string(),
+                access_value_id: target_id,
                 kind,
             });
     }
@@ -703,12 +705,11 @@ fn parameter_out_summaries(
         let Some((source_id, target_id)) = edge
             .edge
             .target_id
-            .as_deref()
-            .map(|target_id| (edge.edge.source_id.as_str(), target_id))
+            .map(|target_id| (edge.edge.source_id, target_id))
         else {
             continue;
         };
-        let Some((direct_formal_id, _)) = direct_writes.get(source_id) else {
+        let Some((direct_formal_id, _)) = direct_writes.get(&source_id) else {
             continue;
         };
         let Some((callable_id, base_name)) =
@@ -726,7 +727,7 @@ fn parameter_out_summaries(
             .entry(alias_formal_id)
             .or_default()
             .push(ParameterOutSummary {
-                access_value_id: target_id.to_string(),
+                access_value_id: target_id,
                 kind: ParameterOutMutationKind::Alias,
             });
     }
@@ -763,15 +764,14 @@ fn direct_mutation_kind(data_flow: &sg::DataFlow) -> Option<ParameterOutMutation
 }
 
 fn access_base_name(
-    value_id: &str,
+    value_id: NodeId,
     values_by_id: &BTreeMap<NodeId, sg::Value>,
     expressions_by_id: &BTreeMap<NodeId, sg::Expression>,
 ) -> Option<(NodeId, String)> {
-    let value = values_by_id.get(value_id)?;
+    let value = values_by_id.get(&value_id)?;
     let expression = value
         .expression_id
-        .as_deref()
-        .and_then(|expression_id| expressions_by_id.get(expression_id))?;
+        .and_then(|expression_id| expressions_by_id.get(&expression_id))?;
     if !matches!(
         expression.kind,
         ExpressionKind::FieldAccess | ExpressionKind::IndexAccess
@@ -793,10 +793,10 @@ fn access_base_name(
 
 fn actual_argument_count(
     call_argument_values: &BTreeMap<(NodeId, usize), NodeId>,
-    call_site_id: &str,
+    call_site_id: NodeId,
 ) -> usize {
     call_argument_values
-        .range((call_site_id.to_string(), 0)..=(call_site_id.to_string(), usize::MAX))
+        .range((call_site_id, 0)..=(call_site_id, usize::MAX))
         .count()
 }
 
@@ -850,12 +850,12 @@ fn is_receiver_call(call_site: &sg::CallSite, callee: &sg::Callable) -> bool {
 fn has_receiver_flow_input(
     call_site: &sg::CallSite,
     call_receiver_values: &BTreeMap<NodeId, NodeId>,
-    call_site_id: &str,
+    call_site_id: NodeId,
 ) -> bool {
     matches!(
         call_site.dispatch_kind,
         DispatchKind::Method | DispatchKind::Constructor
-    ) || call_receiver_values.contains_key(call_site_id)
+    ) || call_receiver_values.contains_key(&call_site_id)
 }
 
 fn unavailable_target_reason(calls: &sg::Calls) -> &'static str {
@@ -900,6 +900,23 @@ fn unavailable_exception_target_reason(calls: &sg::Calls) -> &'static str {
     }
 }
 
+/// The call edge's target as an id part, or a fixed marker when it has none.
+fn call_target_part(call_edge: &sg::GraphEdge) -> IdPart<'static> {
+    match call_edge.target_id {
+        Some(target_id) => IdPart::Id(target_id),
+        None => IdPart::Str("unknown-target"),
+    }
+}
+
+/// The identity text a callable id hashed as before ids became compact. Edge ids derived from a
+/// callee id embedded that text in their precision key, so it is needed to keep them identical.
+fn legacy_id_text(id: NodeId) -> String {
+    crate::supergraph::ids::with_legacy_id_text(|| serde_json::to_value(id))
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| id.to_string())
+}
+
 fn add_formal_unavailable_diagnostic(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
@@ -908,11 +925,11 @@ fn add_formal_unavailable_diagnostic(
     reason: &str,
 ) {
     let diagnostic_id = sg::stable_id(
-        "diagnostic",
-        &[
+        Tag::Diagnostic,
+        id_parts![
             "sg080-formal-unavailable",
-            &calls.call_site_id,
-            call_edge.target_id.as_deref().unwrap_or("unknown-target"),
+            calls.call_site_id,
+            call_target_part(call_edge),
             reason,
         ],
     );
@@ -925,7 +942,7 @@ fn add_formal_unavailable_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             call_edge.owner.clone(),
             call_edge.span.or(Some(call_site.span)),
@@ -945,7 +962,7 @@ fn add_formal_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id.clone(), call_edge.edge_id.clone()],
+                related: vec![calls.call_site_id],
             }),
         ),
     );
@@ -959,11 +976,11 @@ fn add_receiver_unavailable_diagnostic(
     reason: &str,
 ) {
     let diagnostic_id = sg::stable_id(
-        "diagnostic",
-        &[
+        Tag::Diagnostic,
+        id_parts![
             "sg081-receiver-unavailable",
-            &calls.call_site_id,
-            call_edge.target_id.as_deref().unwrap_or("unknown-target"),
+            calls.call_site_id,
+            call_target_part(call_edge),
             reason,
         ],
     );
@@ -976,7 +993,7 @@ fn add_receiver_unavailable_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             call_edge.owner.clone(),
             call_edge.span.or(Some(call_site.span)),
@@ -996,7 +1013,7 @@ fn add_receiver_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id.clone(), call_edge.edge_id.clone()],
+                related: vec![calls.call_site_id],
             }),
         ),
     );
@@ -1010,11 +1027,11 @@ fn add_return_unavailable_diagnostic(
     reason: &str,
 ) {
     let diagnostic_id = sg::stable_id(
-        "diagnostic",
-        &[
+        Tag::Diagnostic,
+        id_parts![
             "sg082-return-unavailable",
-            &calls.call_site_id,
-            call_edge.target_id.as_deref().unwrap_or("unknown-target"),
+            calls.call_site_id,
+            call_target_part(call_edge),
             reason,
         ],
     );
@@ -1027,7 +1044,7 @@ fn add_return_unavailable_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             call_edge.owner.clone(),
             call_edge.span.or(Some(call_site.span)),
@@ -1047,7 +1064,7 @@ fn add_return_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id.clone(), call_edge.edge_id.clone()],
+                related: vec![calls.call_site_id],
             }),
         ),
     );
@@ -1061,11 +1078,11 @@ fn add_throws_unavailable_diagnostic(
     reason: &str,
 ) {
     let diagnostic_id = sg::stable_id(
-        "diagnostic",
-        &[
+        Tag::Diagnostic,
+        id_parts![
             "sg084-throws-unavailable",
-            &calls.call_site_id,
-            call_edge.target_id.as_deref().unwrap_or("unknown-target"),
+            calls.call_site_id,
+            call_target_part(call_edge),
             reason,
         ],
     );
@@ -1078,7 +1095,7 @@ fn add_throws_unavailable_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             call_edge.owner.clone(),
             call_edge.span.or(Some(call_site.span)),
@@ -1098,7 +1115,7 @@ fn add_throws_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id.clone(), call_edge.edge_id.clone()],
+                related: vec![calls.call_site_id],
             }),
         ),
     );
@@ -1108,14 +1125,14 @@ fn add_parameter_out_summaries(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
     calls: &sg::Calls,
-    callee_id: &str,
-    parameter_node_id: &str,
-    state_value_id: &str,
+    callee_id: NodeId,
+    parameter_node_id: NodeId,
+    state_value_id: NodeId,
     parameter_name: &str,
     ordinal: usize,
     parameter_out_summaries: &BTreeMap<NodeId, Vec<ParameterOutSummary>>,
 ) {
-    let Some(summaries) = parameter_out_summaries.get(parameter_node_id) else {
+    let Some(summaries) = parameter_out_summaries.get(&parameter_node_id) else {
         return;
     };
     for summary in summaries {
@@ -1130,8 +1147,8 @@ fn add_parameter_out_summaries(
                     &format!("{}:{}:{}", ordinal, summary.access_value_id, precision),
                 ),
                 EdgeKind::ParameterOut,
-                parameter_node_id.to_string(),
-                state_value_id.to_string(),
+                parameter_node_id,
+                state_value_id,
                 call_edge.owner.clone(),
                 call_edge.span,
                 confidence,
@@ -1141,7 +1158,7 @@ fn add_parameter_out_summaries(
                 EdgeFact::ParameterOut(sg::ParameterOut {
                     call_site_id: calls.call_site_id.clone(),
                     caller_callable_id: calls.caller_callable_id.clone(),
-                    callee_callable_id: callee_id.to_string(),
+                    callee_callable_id: callee_id,
                     parameter_name: parameter_name.to_string(),
                     ordinal,
                     precision: precision.to_string(),
@@ -1188,10 +1205,10 @@ fn add_parameter_out_unavailable_diagnostic(
     reason: &str,
 ) {
     let diagnostic_id = sg::stable_id(
-        "diagnostic",
-        &[
+        Tag::Diagnostic,
+        id_parts![
             "sg083-parameter-out-unavailable",
-            &calls.call_site_id,
+            calls.call_site_id,
             parameter_name,
             reason,
         ],
@@ -1199,7 +1216,7 @@ fn add_parameter_out_unavailable_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             call_edge.owner.clone(),
             call_edge.span.or(Some(call_site.span)),
@@ -1221,7 +1238,7 @@ fn add_parameter_out_unavailable_diagnostic(
                     .clone()
                     .or_else(|| Some(call_site.artifact_id.clone())),
                 span: call_edge.span.or(Some(call_site.span)),
-                related: vec![calls.call_site_id.clone(), call_edge.edge_id.clone()],
+                related: vec![calls.call_site_id],
             }),
         ),
     );
@@ -1231,9 +1248,9 @@ fn add_returns_to(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
     calls: &sg::Calls,
-    callee_id: &str,
-    return_id: &str,
-    call_result_id: &str,
+    callee_id: NodeId,
+    return_id: NodeId,
+    call_result_id: NodeId,
     confidence: Confidence,
     precision: &str,
 ) {
@@ -1244,11 +1261,11 @@ fn add_returns_to(
                 "returns-to",
                 return_id,
                 call_result_id,
-                &format!("{callee_id}:{precision}"),
+                &format!("{}:{precision}", legacy_id_text(callee_id)),
             ),
             EdgeKind::ReturnsTo,
-            return_id.to_string(),
-            call_result_id.to_string(),
+            return_id,
+            call_result_id,
             call_edge.owner.clone(),
             call_edge.span,
             confidence,
@@ -1256,7 +1273,7 @@ fn add_returns_to(
             EdgeFact::ReturnsTo(sg::ReturnsTo {
                 call_site_id: calls.call_site_id.clone(),
                 caller_callable_id: calls.caller_callable_id.clone(),
-                callee_callable_id: callee_id.to_string(),
+                callee_callable_id: callee_id,
                 precision: precision.to_string(),
             }),
         ),
@@ -1267,9 +1284,9 @@ fn add_throws_to(
     graph: &mut ProgramSupergraph,
     call_edge: &sg::GraphEdge,
     calls: &sg::Calls,
-    callee_id: &str,
-    raise_id: &str,
-    target_id: &str,
+    callee_id: NodeId,
+    raise_id: NodeId,
+    target_id: NodeId,
     confidence: Confidence,
     precision: &str,
     target_kind: sg::ThrowsToTargetKind,
@@ -1282,11 +1299,11 @@ fn add_throws_to(
                 "throws-to",
                 raise_id,
                 target_id,
-                &format!("{callee_id}:{precision}"),
+                &format!("{}:{precision}", legacy_id_text(callee_id)),
             ),
             EdgeKind::ThrowsTo,
-            raise_id.to_string(),
-            target_id.to_string(),
+            raise_id,
+            target_id,
             call_edge.owner.clone(),
             call_edge.span,
             confidence,
@@ -1294,7 +1311,7 @@ fn add_throws_to(
             EdgeFact::ThrowsTo(sg::ThrowsTo {
                 call_site_id: calls.call_site_id.clone(),
                 caller_callable_id: calls.caller_callable_id.clone(),
-                callee_callable_id: callee_id.to_string(),
+                callee_callable_id: callee_id,
                 target_kind,
                 exception_value: summary.value.clone(),
                 exception_type: summary.exception_type.clone(),
@@ -1324,12 +1341,12 @@ enum CallerExceptionDestination {
 }
 
 fn exception_summary(
-    exception_id: &str,
+    exception_id: NodeId,
     values_by_id: &BTreeMap<NodeId, sg::Value>,
     span: Option<SourceSpan>,
 ) -> ExceptionSummary {
     let value = values_by_id
-        .get(exception_id)
+        .get(&exception_id)
         .and_then(|value| value.name.clone());
     let exception_type = value.as_deref().and_then(exception_type_from_value);
     ExceptionSummary {
@@ -1386,8 +1403,7 @@ fn throws_to_confidence(calls: &sg::Calls) -> (Confidence, &'static str) {
 fn exception_destinations(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callee_id: &str,
-    exception_id: &str,
+    callee_id: NodeId,
     exception_span: Option<SourceSpan>,
 ) -> ExceptionDestinations {
     let Some(raise_node_id) = exception_span.and_then(|span| {
@@ -1403,8 +1419,7 @@ fn exception_destinations(
     };
     let callee_exceptional_exit = exceptional_exit_for_callable(graph, index, callee_id);
     let reaches_callee_exceptional_exit = callee_exceptional_exit
-        .as_deref()
-        .is_some_and(|exit_id| cfg_reachable(graph, index, callee_id, &raise_node_id, exit_id));
+        .is_some_and(|exit_id| cfg_reachable(graph, index, callee_id, raise_node_id, exit_id));
     let mut callee_handlers = index
         .control_flow_edges(graph, callee_id)
         .filter_map(|edge| {
@@ -1419,17 +1434,12 @@ fn exception_destinations(
             }
         })
         .filter(|target_id| {
-            callee_exceptional_exit.as_deref() != Some(target_id.as_str())
+            callee_exceptional_exit != Some(*target_id)
                 && !reaches_callee_exceptional_exit
         })
         .collect::<Vec<_>>();
     callee_handlers.sort();
     callee_handlers.dedup();
-    if callee_handlers.is_empty() && !reaches_callee_exceptional_exit {
-        // The span matched an exceptional value, so keep the target visible in diagnostics.
-        callee_handlers.push(format!("{exception_id}:handler-unavailable"));
-        callee_handlers.clear();
-    }
     ExceptionDestinations {
         callee_handlers,
         callee_exceptional_exit,
@@ -1445,7 +1455,7 @@ fn caller_exception_destination(
     caller_handler_for_call_site(graph, index, call_site)
         .map(CallerExceptionDestination::Handler)
         .or_else(|| {
-            exceptional_exit_for_callable(graph, index, &call_site.enclosing_callable_id)
+            exceptional_exit_for_callable(graph, index, call_site.enclosing_callable_id)
                 .map(CallerExceptionDestination::ExceptionalExit)
         })
 }
@@ -1458,7 +1468,7 @@ fn caller_handler_for_call_site(
     let statement_id = smallest_statement_containing_span(
         graph,
         index,
-        &call_site.enclosing_callable_id,
+        call_site.enclosing_callable_id,
         call_site.span,
     )?;
     index
@@ -1486,8 +1496,8 @@ fn caller_handler_for_call_site(
             cfg_node_for_statement_id(
                 graph,
                 index,
-                &call_site.enclosing_callable_id,
-                handler_statement_id,
+                call_site.enclosing_callable_id,
+                *handler_statement_id,
             )
         })
 }
@@ -1495,7 +1505,7 @@ fn caller_handler_for_call_site(
 fn smallest_statement_containing_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     span: SourceSpan,
 ) -> Option<NodeId> {
     index
@@ -1521,8 +1531,8 @@ fn smallest_statement_containing_span(
 fn cfg_node_for_statement_id(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    statement_id: &str,
+    callable_id: NodeId,
+    statement_id: NodeId,
 ) -> Option<NodeId> {
     let statement_span = index.nodes(graph, callable_id).find_map(|node| {
         let NodeFact::Statement(statement) = &node.fact else {
@@ -1542,7 +1552,7 @@ fn cfg_node_for_statement_id(
 fn cfg_node_at_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     span: SourceSpan,
     role: Option<ControlFlowNodeRole>,
 ) -> Option<NodeId> {
@@ -1560,7 +1570,7 @@ fn cfg_node_at_span(
 fn exceptional_exit_for_callable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Option<NodeId> {
     index.nodes(graph, callable_id).find_map(|node| {
         let NodeFact::ControlFlow(control) = &node.fact else {
@@ -1579,20 +1589,17 @@ fn exceptional_exit_for_callable(
 fn cfg_reachable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    source_id: &str,
-    target_id: &str,
+    callable_id: NodeId,
+    source_id: NodeId,
+    target_id: NodeId,
 ) -> bool {
-    let mut successors = HashMap::<&str, Vec<&str>>::new();
+    let mut successors = IdMap::<NodeId, Vec<NodeId>>::default();
     for edge in index.control_flow_edges(graph, callable_id) {
-        if let Some(next) = &edge.target_id {
-            successors
-                .entry(edge.source_id.as_str())
-                .or_default()
-                .push(next.as_str());
+        if let Some(next) = edge.target_id {
+            successors.entry(edge.source_id).or_default().push(next);
         }
     }
-    let mut seen = HashSet::new();
+    let mut seen = IdSet::<NodeId>::default();
     let mut frontier = vec![source_id];
     while let Some(node_id) = frontier.pop() {
         if node_id == target_id {
@@ -1601,7 +1608,7 @@ fn cfg_reachable(
         if !seen.insert(node_id) {
             continue;
         }
-        if let Some(next) = successors.get(node_id) {
+        if let Some(next) = successors.get(&node_id) {
             frontier.extend(next.iter().copied());
         }
     }
@@ -1637,8 +1644,8 @@ mod tests {
         ExternalTarget, ExternalTargetKind, GraphEdge, GraphNode, ProgramDependenceGraphView,
         ProgramSupergraphBuilder, Signature, SourceOwnership, Uncertainty, Value, ValueKind,
         build_indexes, refresh_fact_identity, refresh_provenance, refresh_uncertainty, sort_graph,
-        stable_id,
     };
+    use crate::supergraph::ids::test_support::test_id_of;
 
     #[test]
     fn sg080_python_connects_positional_and_named_actuals_to_formals() {
@@ -1715,7 +1722,7 @@ mod tests {
         assert!(
             !parameter_in_edges_for_call(&graph, "call:python:named")
                 .iter()
-                .any(|edge| edge.target_id.as_deref() == Some("value:callee:first")),
+                .any(|edge| edge.target_id == Some(tid("value:callee:first"))),
             "named argument should not be consumed as a positional argument for the first formal"
         );
         assert_parameter_in_endpoints_are_values(&graph);
@@ -1837,8 +1844,8 @@ mod tests {
             !parameter_in_edges_for_call(&graph, "call:python:method")
                 .iter()
                 .any(|edge| {
-                    edge.source_id == "value:python:method:item"
-                        && edge.target_id.as_deref() == Some("value:callee:receiver:self")
+                    edge.source_id == tid("value:python:method:item")
+                        && edge.target_id == Some(tid("value:callee:receiver:self"))
                 }),
             "ordinary arguments must not be mapped to the receiver formal"
         );
@@ -2010,7 +2017,7 @@ mod tests {
             !matches!(
                 &node.fact,
                 NodeFact::Value(value)
-                    if value.value_id == "value:callee:receiver:self"
+                    if value.value_id == tid("value:callee:receiver:self")
             )
         });
         finish_sg080_emit(&mut graph);
@@ -2073,22 +2080,22 @@ mod tests {
             SG082_EXACT_PRECISION,
         );
         let view = ProgramDependenceGraphView::new(&graph);
-        let backward = view.behavior_backward_slice("value:python:call-result");
+        let backward = view.behavior_backward_slice(tid("value:python:call-result"));
         assert!(
             backward
                 .value_ids
-                .contains(&"value:callee:return:python".to_string())
+                .contains(&tid("value:callee:return:python"))
         );
-        let forward = view.value_forward_slice("value:callee:return:python");
+        let forward = view.value_forward_slice(tid("value:callee:return:python"));
         assert!(
             forward
                 .value_ids
-                .contains(&"value:python:call-result".to_string())
+                .contains(&tid("value:python:call-result"))
         );
         assert!(
             forward
                 .value_ids
-                .contains(&"value:python:caller-use".to_string())
+                .contains(&tid("value:python:caller-use"))
         );
         assert_returns_to_endpoints_are_values(&graph);
     }
@@ -2349,11 +2356,11 @@ mod tests {
             "handled caller exceptions must not flow directly to caller exceptional exit"
         );
         let view = ProgramDependenceGraphView::new(&graph);
-        let forward = view.value_forward_slice("value:callee:exception:value-error");
+        let forward = view.value_forward_slice(tid("value:callee:exception:value-error"));
         assert!(
             forward
                 .value_ids
-                .contains(&"value:python:call-exception".to_string())
+                .contains(&tid("value:python:call-exception"))
         );
     }
 
@@ -2480,8 +2487,8 @@ mod tests {
         assert!(
             !throws_to_edges_for_call(&graph, "call:python:handled-in-callee")
                 .iter()
-                .any(|edge| edge.target_id.as_deref()
-                    == Some("value:python:handled-call-exception")
+                .any(|edge| edge.target_id
+                    == Some(tid("value:python:handled-call-exception"))
                     || matches!(
                         &edge.fact,
                         EdgeFact::ThrowsTo(throws)
@@ -2636,8 +2643,8 @@ mod tests {
         assert!(
             !parameter_out_edges_for_call(&graph, "call:python:receiver-mutation")
                 .iter()
-                .any(|edge| edge.target_id.as_deref()
-                    == Some("value:python:receiver-mutation:item-state")),
+                .any(|edge| edge.target_id
+                    == Some(tid("value:python:receiver-mutation:item-state"))),
             "pass-through method arguments must not receive ParameterOut"
         );
     }
@@ -2806,11 +2813,11 @@ mod tests {
     }
 
     fn sg080_graph(language: &str, path: &str, _parser_version: &str) -> ProgramSupergraph {
-        let artifact_id = format!("artifact:{path}");
-        let scope_id = "scope:sample".to_string();
-        let caller_id = "callable:caller".to_string();
-        let callee_id = "callable:callee".to_string();
-        let owner = owner(&artifact_id, &scope_id, &caller_id);
+        let artifact_id = tid(&format!("artifact:{path}"));
+        let scope_id = tid("scope:sample");
+        let caller_id = tid("callable:caller");
+        let callee_id = tid("callable:callee");
+        let owner = owner_of(artifact_id, "scope:sample", "callable:caller");
         let mut builder = ProgramSupergraphBuilder::new("repo", language);
         builder.add_artifact(
             sg::Artifact {
@@ -2871,7 +2878,7 @@ mod tests {
             ("value:callee:second", "second", 1),
         ] {
             builder.add_value(
-                formal_value(value_id, &callee_id, name, ordinal),
+                formal_value(value_id, "callable:callee", name, ordinal),
                 owner.clone(),
                 Some(span(11 + ordinal, 12 + ordinal)),
                 Confidence::Exact,
@@ -2902,7 +2909,7 @@ mod tests {
         graph.edges.push(call_edge(
             call_site_id,
             "callable:callee",
-            Some("callable:callee".to_string()),
+            Some(tid("callable:callee")),
             None,
             None,
             resolution,
@@ -2937,9 +2944,9 @@ mod tests {
             owner.clone(),
         ));
         graph.nodes.push(GraphNode {
-            node_id: external_target_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(external_target_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::ExternalTarget,
             owner: SourceOwnership::default(),
             span: None,
@@ -2947,7 +2954,7 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: Vec::new(),
             fact: NodeFact::ExternalTarget(ExternalTarget {
-                external_target_id: external_target_id.to_string(),
+                external_target_id: tid(external_target_id),
                 ecosystem: "typescript".to_string(),
                 package_name: Some("external".to_string()),
                 package_version: None,
@@ -2962,7 +2969,7 @@ mod tests {
             call_site_id,
             external_target_id,
             None,
-            (resolution == Resolution::External).then(|| external_target_id.to_string()),
+            (resolution == Resolution::External).then(|| tid(external_target_id)),
             (resolution == Resolution::Unresolved).then(|| callee_expression.to_string()),
             resolution,
             owner,
@@ -3007,7 +3014,7 @@ mod tests {
         let mut graph = sg080_graph(language, path, parser_version);
         for node in &mut graph.nodes {
             if let NodeFact::Callable(callable) = &mut node.fact {
-                if callable.callable_id == "callable:callee" {
+                if callable.callable_id == tid("callable:callee") {
                     callable.kind = callee_kind;
                     callable.signature.parameters = parameters.clone();
                 }
@@ -3071,7 +3078,7 @@ mod tests {
         graph.edges.push(call_edge_with_kind(
             call_site_id,
             "callable:callee",
-            Some("callable:callee".to_string()),
+            Some(tid("callable:callee")),
             None,
             None,
             resolution,
@@ -3102,7 +3109,7 @@ mod tests {
         graph.edges.push(call_edge_with_kind(
             call_site_id,
             "callable:callee",
-            Some("callable:callee".to_string()),
+            Some(tid("callable:callee")),
             None,
             None,
             resolution,
@@ -3138,9 +3145,9 @@ mod tests {
             owner.clone(),
         ));
         graph.nodes.push(GraphNode {
-            node_id: external_target_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(external_target_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::ExternalTarget,
             owner: SourceOwnership::default(),
             span: None,
@@ -3148,7 +3155,7 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: Vec::new(),
             fact: NodeFact::ExternalTarget(ExternalTarget {
-                external_target_id: external_target_id.to_string(),
+                external_target_id: tid(external_target_id),
                 ecosystem: "typescript".to_string(),
                 package_name: Some("external".to_string()),
                 package_version: None,
@@ -3163,7 +3170,7 @@ mod tests {
             call_site_id,
             external_target_id,
             None,
-            (resolution == Resolution::External).then(|| external_target_id.to_string()),
+            (resolution == Resolution::External).then(|| tid(external_target_id)),
             (resolution == Resolution::Unresolved).then(|| callee_expression.to_string()),
             resolution,
             CallEdgeKind::External,
@@ -3215,8 +3222,8 @@ mod tests {
 
     fn formal_value(value_id: &str, callable_id: &str, name: &str, ordinal: usize) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some(callable_id.to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid(callable_id)),
             kind: ValueKind::Parameter,
             role: ValueRole::FormalParameter,
             symbol_id: None,
@@ -3237,8 +3244,8 @@ mod tests {
         ordinal: usize,
     ) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some(callable_id.to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid(callable_id)),
             kind: ValueKind::Parameter,
             role: ValueRole::Receiver,
             symbol_id: None,
@@ -3259,13 +3266,13 @@ mod tests {
         name: Option<&str>,
     ) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some("callable:caller".to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid("callable:caller")),
             kind: ValueKind::Argument,
             role: ValueRole::Argument,
             symbol_id: None,
             expression_id: None,
-            call_site_id: Some(call_site_id.to_string()),
+            call_site_id: Some(tid(call_site_id)),
             name: name.map(str::to_string),
             ordinal: Some(ordinal),
             state_of_value_id: None,
@@ -3276,13 +3283,13 @@ mod tests {
 
     fn call_receiver_value(value_id: &str, call_site_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some("callable:caller".to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid("callable:caller")),
             kind: ValueKind::Argument,
             role: ValueRole::Receiver,
             symbol_id: None,
             expression_id: None,
-            call_site_id: Some(call_site_id.to_string()),
+            call_site_id: Some(tid(call_site_id)),
             name: Some(name.to_string()),
             ordinal: Some(0),
             state_of_value_id: None,
@@ -3293,8 +3300,8 @@ mod tests {
 
     fn return_value(value_id: &str, callable_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some(callable_id.to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid(callable_id)),
             kind: ValueKind::Return,
             role: ValueRole::ReturnValue,
             symbol_id: None,
@@ -3310,13 +3317,13 @@ mod tests {
 
     fn call_result_value(value_id: &str, call_site_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some("callable:caller".to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid("callable:caller")),
             kind: ValueKind::CallResult,
             role: ValueRole::CallResult,
             symbol_id: None,
             expression_id: None,
-            call_site_id: Some(call_site_id.to_string()),
+            call_site_id: Some(tid(call_site_id)),
             name: Some(name.to_string()),
             ordinal: None,
             state_of_value_id: None,
@@ -3327,8 +3334,8 @@ mod tests {
 
     fn exception_value(value_id: &str, callable_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some(callable_id.to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid(callable_id)),
             kind: ValueKind::Exception,
             role: ValueRole::ExceptionalValue,
             symbol_id: None,
@@ -3344,13 +3351,13 @@ mod tests {
 
     fn call_exception_value(value_id: &str, call_site_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some("callable:caller".to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid("callable:caller")),
             kind: ValueKind::Exception,
             role: ValueRole::ExceptionalValue,
             symbol_id: None,
             expression_id: None,
-            call_site_id: Some(call_site_id.to_string()),
+            call_site_id: Some(tid(call_site_id)),
             name: Some(name.to_string()),
             ordinal: None,
             state_of_value_id: None,
@@ -3361,8 +3368,8 @@ mod tests {
 
     fn caller_use_value(value_id: &str, name: &str) -> Value {
         Value {
-            value_id: value_id.to_string(),
-            callable_id: Some("callable:caller".to_string()),
+            value_id: tid(value_id),
+            callable_id: Some(tid("callable:caller")),
             kind: ValueKind::ComputedExpression,
             role: ValueRole::Unknown,
             symbol_id: None,
@@ -3466,9 +3473,9 @@ mod tests {
         let handler_statement_id = "statement:caller:except-handler";
         let owner = graph_owner(graph);
         graph.nodes.push(GraphNode {
-            node_id: call_statement_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(call_statement_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Statement,
             owner: owner.clone(),
             span: Some(span(90, 130)),
@@ -3476,8 +3483,8 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller try statement"),
             fact: NodeFact::Statement(sg::Statement {
-                statement_id: call_statement_id.to_string(),
-                callable_id: "callable:caller".to_string(),
+                statement_id: tid(call_statement_id),
+                callable_id: tid("callable:caller"),
                 parent_statement_id: None,
                 kind: sg::StatementKind::Expression,
                 ordinal: 0,
@@ -3487,9 +3494,9 @@ mod tests {
             }),
         });
         graph.nodes.push(GraphNode {
-            node_id: handler_statement_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(handler_statement_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Statement,
             owner: owner.clone(),
             span: Some(span(130, 145)),
@@ -3497,8 +3504,8 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller handler statement"),
             fact: NodeFact::Statement(sg::Statement {
-                statement_id: handler_statement_id.to_string(),
-                callable_id: "callable:caller".to_string(),
+                statement_id: tid(handler_statement_id),
+                callable_id: tid("callable:caller"),
                 parent_statement_id: None,
                 kind: sg::StatementKind::Expression,
                 ordinal: 1,
@@ -3508,9 +3515,9 @@ mod tests {
             }),
         });
         graph.nodes.push(GraphNode {
-            node_id: "condition:caller:try".to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid("condition:caller:try"),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Condition,
             owner: owner.clone(),
             span: Some(span(80, 160)),
@@ -3518,31 +3525,31 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test caller exception region"),
             fact: NodeFact::Condition(sg::Condition {
-                condition_id: "condition:caller:try".to_string(),
-                callable_id: "callable:caller".to_string(),
+                condition_id: tid("condition:caller:try"),
+                callable_id: tid("callable:caller"),
                 statement_id: None,
                 expression_id: None,
                 kind: sg::ConditionKind::ExceptionRegion,
                 controlled_statement_ids: vec![
-                    call_statement_id.to_string(),
-                    handler_statement_id.to_string(),
+                    tid(call_statement_id),
+                    tid(handler_statement_id),
                 ],
                 outcome_labels: vec!["try".to_string(), "exception".to_string()],
                 regions: vec![
                     sg::ControlRegion {
                         kind: ControlRegionKind::TryBody,
                         label: "try-body".to_string(),
-                        statement_ids: vec![call_statement_id.to_string()],
-                        entry_statement_id: Some(call_statement_id.to_string()),
-                        exit_statement_id: Some(call_statement_id.to_string()),
+                        statement_ids: vec![tid(call_statement_id)],
+                        entry_statement_id: Some(tid(call_statement_id)),
+                        exit_statement_id: Some(tid(call_statement_id)),
                         fallthrough: sg::FallthroughBehavior::Conditional,
                     },
                     sg::ControlRegion {
                         kind: ControlRegionKind::CatchBody,
                         label: "catch-body".to_string(),
-                        statement_ids: vec![handler_statement_id.to_string()],
-                        entry_statement_id: Some(handler_statement_id.to_string()),
-                        exit_statement_id: Some(handler_statement_id.to_string()),
+                        statement_ids: vec![tid(handler_statement_id)],
+                        entry_statement_id: Some(tid(handler_statement_id)),
+                        exit_statement_id: Some(tid(handler_statement_id)),
                         fallthrough: sg::FallthroughBehavior::Conditional,
                     },
                 ],
@@ -3564,7 +3571,7 @@ mod tests {
             graph.nodes.iter().any(|node| {
                 matches!(
                     &node.fact,
-                    NodeFact::CallSite(call_site) if call_site.call_site_id == call_site_id
+                    NodeFact::CallSite(call_site) if call_site.call_site_id == tid(call_site_id)
                 )
             }),
             "test fixture must add call site before caller try/catch CFG"
@@ -3581,18 +3588,18 @@ mod tests {
         span: Option<SourceSpan>,
     ) {
         graph.nodes.push(GraphNode {
-            node_id: node_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(node_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::ControlFlow,
-            owner: owner(&graph_artifact_id(graph), "scope:sample", callable_id),
+            owner: owner_of(graph_artifact_id(graph), "scope:sample", callable_id),
             span,
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test CFG node"),
             fact: NodeFact::ControlFlow(sg::ControlFlowNode {
-                cfg_node_id: node_id.to_string(),
-                callable_id: callable_id.to_string(),
+                cfg_node_id: tid(node_id),
+                callable_id: tid(callable_id),
                 role,
                 label: label.to_string(),
                 semantic_kind: semantic_kind.map(str::to_string),
@@ -3609,19 +3616,19 @@ mod tests {
         precision: &str,
     ) {
         graph.edges.push(GraphEdge {
-            edge_id: stable_id("edge", &["sg084-test-cfg", source_id, target_id, precision]),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: sg::stable_edge_id(id_parts!["sg084-test-cfg", tid(source_id), tid(target_id), precision]),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::ControlFlow,
-            source_id: source_id.to_string(),
-            target_id: Some(target_id.to_string()),
-            owner: owner(&graph_artifact_id(graph), "scope:sample", callable_id),
+            source_id: tid(source_id),
+            target_id: Some(tid(target_id)),
+            owner: owner_of(graph_artifact_id(graph), "scope:sample", callable_id),
             span: Some(span(101, 102)),
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-084 test exceptional CFG edge"),
             fact: EdgeFact::ControlFlow(sg::ControlFlow {
-                callable_id: callable_id.to_string(),
+                callable_id: tid(callable_id),
                 flow_kind: sg::ControlFlowKind::Branch,
                 outcome,
                 branch_arm: None,
@@ -3632,7 +3639,7 @@ mod tests {
 
     fn set_value_span(graph: &mut ProgramSupergraph, value_id: &str, span: SourceSpan) {
         for node in &mut graph.nodes {
-            if matches!(&node.fact, NodeFact::Value(value) if value.value_id == value_id) {
+            if matches!(&node.fact, NodeFact::Value(value) if value.value_id == tid(value_id)) {
                 node.span = Some(span);
             }
         }
@@ -3640,19 +3647,19 @@ mod tests {
 
     fn add_caller_use_flow(graph: &mut ProgramSupergraph, source_id: &str, target_id: &str) {
         graph.edges.push(GraphEdge {
-            edge_id: stable_id("edge", &["sg082-test-data-flow", source_id, target_id]),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: sg::stable_edge_id(id_parts!["sg082-test-data-flow", tid(source_id), tid(target_id)]),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::DataFlow,
-            source_id: source_id.to_string(),
-            target_id: Some(target_id.to_string()),
+            source_id: tid(source_id),
+            target_id: Some(tid(target_id)),
             owner: graph_owner(graph),
             span: Some(span(130, 140)),
             confidence: Confidence::Exact,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-082 test caller use data flow"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
-                callable_id: "callable:caller".to_string(),
+                callable_id: tid("callable:caller"),
                 name: "received".to_string(),
                 flow_kind: DataFlowKind::DefinitionToUse,
                 precision: "sg082-test-call-result-to-caller-use".to_string(),
@@ -3670,16 +3677,16 @@ mod tests {
     ) {
         graph.nodes.push(value_node(
             Value {
-                value_id: state_value_id.to_string(),
-                callable_id: Some("callable:caller".to_string()),
+                value_id: tid(state_value_id),
+                callable_id: Some(tid("callable:caller")),
                 kind: ValueKind::Argument,
                 role: ValueRole::MutableArgumentState,
                 symbol_id: None,
                 expression_id: None,
-                call_site_id: Some(call_site_id.to_string()),
+                call_site_id: Some(tid(call_site_id)),
                 name: Some(name.to_string()),
                 ordinal: Some(ordinal),
-                state_of_value_id: Some(state_of_value_id.to_string()),
+                state_of_value_id: Some(tid(state_of_value_id)),
                 type_hint: None,
                 literal: None,
             },
@@ -3700,8 +3707,8 @@ mod tests {
         let artifact_id = graph_artifact_id(graph);
         graph.nodes.push(value_node(
             Value {
-                value_id: rhs_value_id.clone(),
-                callable_id: Some("callable:callee".to_string()),
+                value_id: tid(&rhs_value_id),
+                callable_id: Some(tid("callable:callee")),
                 kind: ValueKind::ComputedExpression,
                 role: ValueRole::Unknown,
                 symbol_id: None,
@@ -3713,7 +3720,7 @@ mod tests {
                 type_hint: None,
                 literal: None,
             },
-            owner(&artifact_id, "scope:sample", "callable:callee"),
+            owner_of(artifact_id, "scope:sample", "callable:callee"),
         ));
         let (flow_kind, precision) = match kind {
             ExpressionKind::FieldAccess => (DataFlowKind::FieldAccess, "sg073-field-write-value"),
@@ -3721,22 +3728,23 @@ mod tests {
             _ => panic!("SG-083 access write helper requires field or index access"),
         };
         graph.edges.push(GraphEdge {
-            edge_id: stable_id(
-                "edge",
-                &["sg083-test-write", &rhs_value_id, &access_value_id],
-            ),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: sg::stable_edge_id(id_parts![
+                "sg083-test-write",
+                tid(&rhs_value_id),
+                tid(&access_value_id)
+            ]),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::DataFlow,
-            source_id: rhs_value_id,
-            target_id: Some(access_value_id.clone()),
-            owner: owner(&artifact_id, "scope:sample", "callable:callee"),
+            source_id: tid(&rhs_value_id),
+            target_id: Some(tid(&access_value_id)),
+            owner: owner_of(artifact_id, "scope:sample", "callable:callee"),
             span: Some(span(150, 160)),
             confidence: Confidence::Probable,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-083 test callee access write"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
-                callable_id: "callable:callee".to_string(),
+                callable_id: tid("callable:callee"),
                 name: member_name.to_string(),
                 flow_kind,
                 precision: precision.to_string(),
@@ -3753,7 +3761,7 @@ mod tests {
         kind: ExpressionKind,
     ) -> String {
         let artifact_id = graph_artifact_id(graph);
-        let owner = owner(&artifact_id, "scope:sample", "callable:callee");
+        let owner = owner_of(artifact_id, "scope:sample", "callable:callee");
         let base_expression_id = format!("expr:callee:{access_key}:base");
         let member_expression_id = format!("expr:callee:{access_key}:member");
         let access_expression_id = format!("expr:callee:{access_key}");
@@ -3790,8 +3798,8 @@ mod tests {
         ));
         graph.nodes.push(value_node(
             Value {
-                value_id: access_value_id.clone(),
-                callable_id: Some("callable:callee".to_string()),
+                value_id: tid(&access_value_id),
+                callable_id: Some(tid("callable:callee")),
                 kind: match kind {
                     ExpressionKind::FieldAccess => ValueKind::Field,
                     ExpressionKind::IndexAccess => ValueKind::Index,
@@ -3799,7 +3807,7 @@ mod tests {
                 },
                 role: ValueRole::Unknown,
                 symbol_id: None,
-                expression_id: Some(access_expression_id),
+                expression_id: Some(tid(&access_expression_id)),
                 call_site_id: None,
                 name: Some(member_name.to_string()),
                 ordinal: None,
@@ -3823,9 +3831,9 @@ mod tests {
         owner: SourceOwnership,
     ) -> GraphNode {
         GraphNode {
-            node_id: expression_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(expression_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Expression,
             owner,
             span: Some(span(150, 160)),
@@ -3833,15 +3841,15 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-083 test expression"),
             fact: NodeFact::Expression(sg::Expression {
-                expression_id: expression_id.to_string(),
-                callable_id: "callable:callee".to_string(),
+                expression_id: tid(expression_id),
+                callable_id: tid("callable:callee"),
                 statement_id: None,
                 parent_expression_id: None,
                 kind,
                 ordinal: 0,
-                child_expression_ids,
+                child_expression_ids: child_expression_ids.iter().map(|id| tid(id)).collect(),
                 symbol_id: None,
-                value_id: value_id.map(str::to_string),
+                value_id: value_id.map(tid),
                 original_text: original_text.map(str::to_string),
                 normalized: sg::NormalizedExpression {
                     canonical: original_text.map(str::to_string),
@@ -3856,19 +3864,19 @@ mod tests {
 
     fn add_alias_summary_flow(graph: &mut ProgramSupergraph, source_id: &str, target_id: &str) {
         graph.edges.push(GraphEdge {
-            edge_id: stable_id("edge", &["sg083-test-alias", source_id, target_id]),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: sg::stable_edge_id(id_parts!["sg083-test-alias", tid(source_id), tid(target_id)]),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::DataFlow,
-            source_id: source_id.to_string(),
-            target_id: Some(target_id.to_string()),
-            owner: owner(&graph_artifact_id(graph), "scope:sample", "callable:callee"),
+            source_id: tid(source_id),
+            target_id: Some(tid(target_id)),
+            owner: owner_of(graph_artifact_id(graph), "scope:sample", "callable:callee"),
             span: Some(span(170, 180)),
             confidence: Confidence::Unknown,
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-083 test SG-073 alias summary"),
             fact: EdgeFact::DataFlow(sg::DataFlow {
-                callable_id: "callable:callee".to_string(),
+                callable_id: tid("callable:callee"),
                 name: "value".to_string(),
                 flow_kind: DataFlowKind::FieldAccess,
                 precision: "sg073-possible-alias-summary".to_string(),
@@ -3899,9 +3907,9 @@ mod tests {
         owner: SourceOwnership,
     ) -> GraphNode {
         GraphNode {
-            node_id: call_site_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: tid(call_site_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::CallSite,
             owner: owner.clone(),
             span: Some(span(100, 120)),
@@ -3909,9 +3917,9 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: Vec::new(),
             fact: NodeFact::CallSite(sg::CallSite {
-                call_site_id: call_site_id.to_string(),
+                call_site_id: tid(call_site_id),
                 artifact_id: owner.artifact_id.clone().expect("artifact owner"),
-                enclosing_callable_id: "callable:caller".to_string(),
+                enclosing_callable_id: tid("callable:caller"),
                 span: span(100, 120),
                 callee_expression: callee_expression.to_string(),
                 argument_shape,
@@ -3924,8 +3932,8 @@ mod tests {
     fn value_node(value: Value, owner: SourceOwnership) -> GraphNode {
         GraphNode {
             node_id: value.value_id.clone(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::Value,
             owner,
             span: Some(span(101, 102)),
@@ -3939,8 +3947,8 @@ mod tests {
     fn call_edge(
         call_site_id: &str,
         target_id: &str,
-        callee_callable_id: Option<String>,
-        external_target_id: Option<String>,
+        callee_callable_id: Option<NodeId>,
+        external_target_id: Option<NodeId>,
         unresolved_target: Option<String>,
         resolution: Resolution,
         owner: SourceOwnership,
@@ -3960,23 +3968,25 @@ mod tests {
     fn call_edge_with_kind(
         call_site_id: &str,
         target_id: &str,
-        callee_callable_id: Option<String>,
-        external_target_id: Option<String>,
+        callee_callable_id: Option<NodeId>,
+        external_target_id: Option<NodeId>,
         unresolved_target: Option<String>,
         resolution: Resolution,
         kind: CallEdgeKind,
         owner: SourceOwnership,
     ) -> GraphEdge {
         GraphEdge {
-            edge_id: stable_id(
-                "edge",
-                &["calls", call_site_id, target_id, &format!("{resolution:?}")],
-            ),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: sg::stable_edge_id(id_parts![
+                "calls",
+                tid(call_site_id),
+                tid(target_id),
+                &format!("{resolution:?}")
+            ]),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::Calls,
-            source_id: call_site_id.to_string(),
-            target_id: Some(target_id.to_string()),
+            source_id: tid(call_site_id),
+            target_id: Some(tid(target_id)),
             owner,
             span: Some(span(100, 120)),
             confidence: match resolution {
@@ -3989,35 +3999,56 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: inference_evidence("SG-080 test call edge"),
             fact: EdgeFact::Calls(sg::Calls {
-                caller_callable_id: "callable:caller".to_string(),
+                caller_callable_id: tid("callable:caller"),
                 callee_callable_id,
                 external_target_id,
                 unresolved_target,
-                call_site_id: call_site_id.to_string(),
+                call_site_id: tid(call_site_id),
                 kind,
                 resolution,
             }),
         }
     }
 
+    fn tid(text: &str) -> NodeId {
+        let tag = match text.split_once(':').map(|(prefix, _)| prefix) {
+            Some("value") => Tag::Value,
+            Some("callable") => Tag::Callable,
+            Some("call") => Tag::CallSite,
+            Some("cfg") => Tag::CfgNode,
+            Some("scope") => Tag::Scope,
+            Some("statement") => Tag::Statement,
+            Some("condition") => Tag::Condition,
+            Some("expr") => Tag::Expression,
+            Some("external") => Tag::ExternalTarget,
+            Some("binding") => Tag::Binding,
+            _ => Tag::Artifact,
+        };
+        test_id_of(tag, text)
+    }
+
     fn owner(artifact_id: &str, scope_id: &str, callable_id: &str) -> SourceOwnership {
+        owner_of(tid(artifact_id), scope_id, callable_id)
+    }
+
+    fn owner_of(artifact_id: NodeId, scope_id: &str, callable_id: &str) -> SourceOwnership {
         SourceOwnership {
-            artifact_id: Some(artifact_id.to_string()),
-            scope_id: Some(scope_id.to_string()),
-            callable_id: Some(callable_id.to_string()),
+            artifact_id: Some(artifact_id),
+            scope_id: Some(tid(scope_id)),
+            callable_id: Some(tid(callable_id)),
         }
     }
 
     fn graph_owner(graph: &ProgramSupergraph) -> SourceOwnership {
-        owner(&graph_artifact_id(graph), "scope:sample", "callable:caller")
+        owner_of(graph_artifact_id(graph), "scope:sample", "callable:caller")
     }
 
-    fn graph_artifact_id(graph: &ProgramSupergraph) -> String {
+    fn graph_artifact_id(graph: &ProgramSupergraph) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
-                NodeFact::Artifact(artifact) => Some(artifact.artifact_id.clone()),
+                NodeFact::Artifact(artifact) => Some(artifact.artifact_id),
                 _ => None,
             })
             .expect("artifact node")
@@ -4033,7 +4064,7 @@ mod tests {
             .filter(|edge| {
                 matches!(
                     &edge.fact,
-                    EdgeFact::ParameterIn(parameter) if parameter.call_site_id == call_site_id
+                    EdgeFact::ParameterIn(parameter) if parameter.call_site_id == tid(call_site_id)
                 )
             })
             .collect()
@@ -4049,7 +4080,7 @@ mod tests {
             .filter(|edge| {
                 matches!(
                     &edge.fact,
-                    EdgeFact::ReturnsTo(returns) if returns.call_site_id == call_site_id
+                    EdgeFact::ReturnsTo(returns) if returns.call_site_id == tid(call_site_id)
                 )
             })
             .collect()
@@ -4065,7 +4096,7 @@ mod tests {
             .filter(|edge| {
                 matches!(
                     &edge.fact,
-                    EdgeFact::ParameterOut(parameter) if parameter.call_site_id == call_site_id
+                    EdgeFact::ParameterOut(parameter) if parameter.call_site_id == tid(call_site_id)
                 )
             })
             .collect()
@@ -4081,7 +4112,7 @@ mod tests {
             .filter(|edge| {
                 matches!(
                     &edge.fact,
-                    EdgeFact::ThrowsTo(throws) if throws.call_site_id == call_site_id
+                    EdgeFact::ThrowsTo(throws) if throws.call_site_id == tid(call_site_id)
                 )
             })
             .collect()
@@ -4099,7 +4130,7 @@ mod tests {
         let edge = parameter_in_edges_for_call(graph, call_site_id)
             .into_iter()
             .find(|edge| {
-                edge.source_id == source_id && edge.target_id.as_deref() == Some(target_id)
+                edge.source_id == tid(source_id) && edge.target_id == Some(tid(target_id))
             })
             .unwrap_or_else(|| panic!("missing ParameterIn {source_id} -> {target_id}"));
         assert_eq!(edge.confidence, confidence);
@@ -4124,7 +4155,7 @@ mod tests {
         let edge = parameter_in_edges_for_call(graph, call_site_id)
             .into_iter()
             .find(|edge| {
-                edge.source_id == source_id && edge.target_id.as_deref() == Some(target_id)
+                edge.source_id == tid(source_id) && edge.target_id == Some(tid(target_id))
             })
             .unwrap_or_else(|| panic!("missing receiver ParameterIn {source_id} -> {target_id}"));
         assert_eq!(edge.confidence, confidence);
@@ -4148,7 +4179,7 @@ mod tests {
         let edge = returns_to_edges_for_call(graph, call_site_id)
             .into_iter()
             .find(|edge| {
-                edge.source_id == source_id && edge.target_id.as_deref() == Some(target_id)
+                edge.source_id == tid(source_id) && edge.target_id == Some(tid(target_id))
             })
             .unwrap_or_else(|| panic!("missing ReturnsTo {source_id} -> {target_id}"));
         assert_eq!(edge.confidence, confidence);
@@ -4172,7 +4203,7 @@ mod tests {
         let edge = parameter_out_edges_for_call(graph, call_site_id)
             .into_iter()
             .find(|edge| {
-                edge.source_id == source_id && edge.target_id.as_deref() == Some(target_id)
+                edge.source_id == tid(source_id) && edge.target_id == Some(tid(target_id))
             })
             .unwrap_or_else(|| panic!("missing ParameterOut {source_id} -> {target_id}"));
         assert_eq!(edge.confidence, confidence);
@@ -4198,7 +4229,7 @@ mod tests {
         let edge = throws_to_edges_for_call(graph, call_site_id)
             .into_iter()
             .find(|edge| {
-                edge.source_id == source_id && edge.target_id.as_deref() == Some(target_id)
+                edge.source_id == tid(source_id) && edge.target_id == Some(tid(target_id))
             })
             .unwrap_or_else(|| panic!("missing ThrowsTo {source_id} -> {target_id}"));
         assert_eq!(edge.confidence, confidence);
@@ -4217,10 +4248,9 @@ mod tests {
             .iter()
             .filter(|edge| edge.kind == EdgeKind::ParameterIn)
         {
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
                 edge.target_id
-                    .as_ref()
                     .and_then(|target_id| node_kind(graph, target_id)),
                 Some(NodeKind::Value)
             );
@@ -4233,10 +4263,9 @@ mod tests {
             .iter()
             .filter(|edge| edge.kind == EdgeKind::ReturnsTo)
         {
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
                 edge.target_id
-                    .as_ref()
                     .and_then(|target_id| node_kind(graph, target_id)),
                 Some(NodeKind::Value)
             );
@@ -4254,7 +4283,7 @@ mod tests {
                     &node.fact,
                     NodeFact::Diagnostic(diagnostic)
                         if diagnostic.kind == expected_kind
-                            && diagnostic.related.contains(&call_site_id.to_string())
+                            && diagnostic.related.contains(&tid(call_site_id))
                 )
             }),
             "missing {expected_kind:?} diagnostic for {call_site_id}"
@@ -4273,7 +4302,7 @@ mod tests {
                     NodeFact::Diagnostic(diagnostic)
                         if diagnostic.kind == expected_kind
                             && diagnostic.message.contains("SG-082")
-                            && diagnostic.related.contains(&call_site_id.to_string())
+                            && diagnostic.related.contains(&tid(call_site_id))
                 )
             }),
             "missing SG-082 {expected_kind:?} diagnostic for {call_site_id}"
@@ -4292,14 +4321,14 @@ mod tests {
                     NodeFact::Diagnostic(diagnostic)
                         if diagnostic.kind == expected_kind
                             && diagnostic.message.contains("SG-084")
-                            && diagnostic.related.contains(&call_site_id.to_string())
+                            && diagnostic.related.contains(&tid(call_site_id))
                 )
             }),
             "missing SG-084 {expected_kind:?} diagnostic for {call_site_id}"
         );
     }
 
-    fn node_kind(graph: &ProgramSupergraph, node_id: &str) -> Option<NodeKind> {
+    fn node_kind(graph: &ProgramSupergraph, node_id: NodeId) -> Option<NodeKind> {
         graph
             .nodes
             .iter()

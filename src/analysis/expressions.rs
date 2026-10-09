@@ -4,12 +4,13 @@ use crate::ast::{ExpressionAst, ExpressionKind as AstExpressionKind};
 use crate::supergraph::{
     self as sg, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind, NodeFact, NodeId, NodeKind,
     NormalizedExpression, ProgramSupergraph, SourceOwnership, SyntaxReference, ValueLiteral,
-    expression_id,
+    expression_id, stable_edge_id,
 };
 
+use crate::id_parts;
 use super::{
     SemanticCallable, SemanticContext, callable_index::CallableIndex, graph_edge, graph_node,
-    insert_edge, insert_node, span_contains, span_key, stable_id,
+    insert_edge, insert_node, span_contains, span_key,
 };
 
 const CONTAINMENT_PRECISION: &str = "sg021-expression-containment";
@@ -31,7 +32,7 @@ fn emit_callable(
         clear_statement_expression_ids(
             graph,
             index,
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             &statement_ids_for_callable(graph, index, semantic),
         );
         return;
@@ -50,7 +51,7 @@ fn emit_callable(
     update_statement_expression_ids(
         graph,
         index,
-        &semantic.callable().callable_id,
+        semantic.callable().callable_id,
         &statement_ids,
         &statement_expression_ids,
     );
@@ -58,7 +59,7 @@ fn emit_callable(
     for (index, expression) in expressions.iter().enumerate() {
         let expression_id = expression_ids[index].clone();
         let statement_id = statement_indexes[index]
-            .and_then(|statement_index| statement_ids.get(statement_index).cloned());
+            .and_then(|statement_index| statement_ids.get(statement_index).copied().flatten());
         let parent_expression_id =
             parent_indexes[index].map(|parent| expression_ids[parent].clone());
         let kind = expression_kind(expression.kind);
@@ -71,7 +72,7 @@ fn emit_callable(
         insert_node(
             graph,
             graph_node(
-                expression_id.clone(),
+                expression_id,
                 NodeKind::Expression,
                 owner.clone(),
                 Some(expression.source_span),
@@ -79,7 +80,7 @@ fn emit_callable(
                 parser_evidence(semantic, expression, "normalized expression fact"),
                 NodeFact::Expression(sg::Expression {
                     expression_id,
-                    callable_id: semantic.callable().callable_id.clone(),
+                    callable_id: semantic.callable().callable_id,
                     statement_id,
                     parent_expression_id,
                     kind,
@@ -98,7 +99,7 @@ fn emit_callable(
         let Some(container_id) = parent_indexes[index]
             .map(|parent| expression_ids[parent].clone())
             .or_else(|| {
-                statement_indexes[index].and_then(|statement| statement_ids.get(statement).cloned())
+                statement_indexes[index].and_then(|statement| statement_ids.get(statement).copied().flatten())
             })
         else {
             continue;
@@ -106,8 +107,8 @@ fn emit_callable(
         add_contains_edge(
             graph,
             semantic,
-            &container_id,
-            expression_id,
+            container_id,
+            *expression_id,
             &expressions[index],
             owner.clone(),
         );
@@ -260,13 +261,13 @@ fn statement_ids_for_callable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
     semantic: &SemanticCallable<'_>,
-) -> Vec<NodeId> {
+) -> Vec<Option<NodeId>> {
     let mut statement_id_by_span = HashMap::new();
     for node in index.nodes(graph, semantic.callable().callable_id) {
         if let NodeFact::Statement(statement) = &node.fact {
             statement_id_by_span
                 .entry(node.span)
-                .or_insert_with(|| statement.statement_id.clone());
+                .or_insert_with(|| statement.statement_id);
         }
     }
 
@@ -276,8 +277,7 @@ fn statement_ids_for_callable(
         .map(|statement| {
             statement_id_by_span
                 .get(&Some(statement.source_span))
-                .cloned()
-                .unwrap_or_default()
+                .copied()
         })
         .collect()
 }
@@ -285,14 +285,17 @@ fn statement_ids_for_callable(
 fn update_statement_expression_ids(
     graph: &mut ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    statement_ids: &[NodeId],
+    callable_id: NodeId,
+    statement_ids: &[Option<NodeId>],
     expression_ids_by_statement: &BTreeMap<usize, Vec<NodeId>>,
 ) {
     let mut statement_index_by_id = HashMap::new();
     for (statement_index, statement_id) in statement_ids.iter().enumerate() {
+        let Some(statement_id) = statement_id else {
+            continue;
+        };
         statement_index_by_id
-            .entry(statement_id.as_str())
+            .entry(*statement_id)
             .or_insert(statement_index);
     }
     for &position in index.positions(callable_id) {
@@ -300,7 +303,7 @@ fn update_statement_expression_ids(
             continue;
         };
         let Some(statement_index) = statement_index_by_id
-            .get(statement.statement_id.as_str())
+            .get(&statement.statement_id)
             .copied()
         else {
             continue;
@@ -315,15 +318,15 @@ fn update_statement_expression_ids(
 fn clear_statement_expression_ids(
     graph: &mut ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    statement_ids: &[NodeId],
+    callable_id: NodeId,
+    statement_ids: &[Option<NodeId>],
 ) {
-    let statement_ids = statement_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let statement_ids = statement_ids.iter().flatten().copied().collect::<HashSet<_>>();
     for &position in index.positions(callable_id) {
         let NodeFact::Statement(statement) = &mut graph.nodes[position].fact else {
             continue;
         };
-        if statement_ids.contains(statement.statement_id.as_str()) {
+        if statement_ids.contains(&statement.statement_id) {
             statement.expression_ids.clear();
         }
     }
@@ -332,28 +335,26 @@ fn clear_statement_expression_ids(
 fn add_contains_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    container_id: &str,
-    member_id: &str,
+    container_id: NodeId,
+    member_id: NodeId,
     expression: &ExpressionAst,
     owner: SourceOwnership,
 ) {
     insert_edge(
         graph,
         graph_edge(
-            stable_id(
-                "edge",
-                &["contains", container_id, member_id, CONTAINMENT_PRECISION],
+            stable_edge_id(id_parts!["contains", container_id, member_id, CONTAINMENT_PRECISION],
             ),
             EdgeKind::Contains,
-            container_id.to_string(),
-            member_id.to_string(),
+            container_id,
+            member_id,
             owner,
             None,
             Confidence::Exact,
             parser_evidence(semantic, expression, "normalized expression containment"),
             EdgeFact::Contains(sg::Contains {
-                container_id: container_id.to_string(),
-                member_id: member_id.to_string(),
+                container_id: container_id,
+                member_id: member_id,
             }),
         ),
     );
@@ -361,9 +362,9 @@ fn add_contains_edge(
 
 fn expression_owner(semantic: &SemanticCallable<'_>) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(semantic.artifact().artifact_id.clone()),
-        scope_id: Some(semantic.callable().scope_id.clone()),
-        callable_id: Some(semantic.callable().callable_id.clone()),
+        artifact_id: Some(semantic.artifact().artifact_id),
+        scope_id: Some(semantic.callable().scope_id),
+        callable_id: Some(semantic.callable().callable_id),
     }
 }
 
@@ -375,7 +376,7 @@ fn parser_evidence(
     vec![Evidence {
         kind: EvidenceKind::Parser,
         summary: summary.to_string(),
-        source_id: Some(semantic.artifact().artifact_id.clone()),
+        source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(expression.source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
@@ -512,6 +513,7 @@ fn quoted_contents(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    use crate::supergraph::ids::NodeId;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, ExpressionAst, ExpressionKind as AstExpressionKind, FieldAccessAst, FileAst,
@@ -602,8 +604,8 @@ mod tests {
         for (node, expression) in &expressions {
             assert_eq!(node.kind, NodeKind::Expression);
             assert!(expression.statement_id.is_some());
-            assert!(!node.fact_id.is_empty());
-            assert!(!node.payload_hash.is_empty());
+            assert!(!node.fact_id.is_none());
+            assert!(!node.payload_hash.is_none());
             assert!(
                 node.evidence
                     .iter()
@@ -619,7 +621,7 @@ mod tests {
         assert!(expressions.iter().all(|(_, expression)| {
             contains_edges
                 .iter()
-                .any(|edge| edge.target_id.as_deref() == Some(expression.expression_id.as_str()))
+                .any(|edge| edge.target_id == Some(expression.expression_id))
         }));
     }
 

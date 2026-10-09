@@ -9,6 +9,8 @@ use crate::supergraph::{
     EdgeFact, EdgeKind, ExpressionKind, NodeFact, NodeId, NodeKind, ProgramSupergraph, Severity,
     ValueKind, ValueRole, stable_id,
 };
+use crate::id_parts;
+use crate::supergraph::ids::Tag;
 
 use super::{
     SemanticCallable, SemanticContext,
@@ -34,10 +36,9 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph, context: &SemanticContext<'_>)
     }
 }
 
-pub(crate) fn definition_node_id(callable_id: &str, definition: &DefinitionAst) -> NodeId {
-    stable_id(
-        "df-node",
-        &[
+pub(crate) fn definition_node_id(callable_id: NodeId, definition: &DefinitionAst) -> NodeId {
+    stable_id(Tag::DataFlowNode,
+        id_parts![
             callable_id,
             "definition",
             &definition.name,
@@ -47,10 +48,9 @@ pub(crate) fn definition_node_id(callable_id: &str, definition: &DefinitionAst) 
     )
 }
 
-pub(crate) fn use_node_id(callable_id: &str, use_fact: &UseAst) -> NodeId {
-    stable_id(
-        "df-node",
-        &[
+pub(crate) fn use_node_id(callable_id: NodeId, use_fact: &UseAst) -> NodeId {
+    stable_id(Tag::DataFlowNode,
+        id_parts![
             callable_id,
             "use",
             &use_fact.name,
@@ -65,7 +65,7 @@ fn emit_callable(
     context: &SemanticContext<'_>,
     semantic: &SemanticCallable<'_>,
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let owner_id = semantic.owner_id();
     let definitions = semantic
         .definitions()
@@ -88,15 +88,15 @@ fn emit_callable(
         insert_node(
             graph,
             graph_node(
-                node_id.clone(),
+                node_id,
                 NodeKind::DataFlow,
                 node_owner(semantic),
                 Some(definition.source_span),
                 Confidence::Exact,
                 inference_evidence("normalized definition fact"),
                 NodeFact::DataFlow(sg::DataFlowNode {
-                    data_flow_node_id: node_id.clone(),
-                    callable_id: callable_id.to_string(),
+                    data_flow_node_id: node_id,
+                    callable_id,
                     role: DataFlowNodeRole::Definition,
                     name: Some(definition.name.clone()),
                     text: definition.text.clone(),
@@ -104,7 +104,7 @@ fn emit_callable(
                 }),
             ),
         );
-        add_defines_edge(graph, semantic, definition, &node_id);
+        add_defines_edge(graph, semantic, definition, node_id);
     }
 
     for use_fact in &uses {
@@ -112,15 +112,15 @@ fn emit_callable(
         insert_node(
             graph,
             graph_node(
-                node_id.clone(),
+                node_id,
                 NodeKind::DataFlow,
                 node_owner(semantic),
                 Some(use_fact.source_span),
                 Confidence::Exact,
                 inference_evidence("normalized use fact"),
                 NodeFact::DataFlow(sg::DataFlowNode {
-                    data_flow_node_id: node_id.clone(),
-                    callable_id: callable_id.to_string(),
+                    data_flow_node_id: node_id,
+                    callable_id,
                     role: DataFlowNodeRole::Use,
                     name: Some(use_fact.name.clone()),
                     text: use_fact.name.clone(),
@@ -128,7 +128,7 @@ fn emit_callable(
                 }),
             ),
         );
-        add_uses_edge(graph, context, semantic, use_fact, &node_id);
+        add_uses_edge(graph, context, semantic, use_fact, node_id);
     }
 
     emit_value_instance_flows(graph, index, semantic, &definitions, &uses, &returns);
@@ -138,24 +138,24 @@ fn add_defines_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
     definition: &DefinitionAst,
-    definition_id: &str,
+    definition_id: NodeId,
 ) {
     let source_id = containing_statement_id(semantic, definition.source_span)
-        .unwrap_or_else(|| semantic.callable().callable_id.clone());
+        .unwrap_or_else(|| semantic.callable().callable_id);
     insert_edge(
         graph,
         graph_edge(
             edge_id("defines", source_id, definition_id, &definition.name),
             EdgeKind::Defines,
             source_id,
-            definition_id.to_string(),
+            definition_id,
             node_owner(semantic),
             Some(definition.source_span),
             Confidence::Exact,
             inference_evidence("definition is owned by nearest normalized statement or callable"),
             EdgeFact::Defines(sg::Defines {
-                callable_id: semantic.callable().callable_id.clone(),
-                definition_id: definition_id.to_string(),
+                callable_id: semantic.callable().callable_id,
+                definition_id,
                 name: definition.name.clone(),
             }),
         ),
@@ -167,25 +167,25 @@ fn add_uses_edge(
     context: &SemanticContext<'_>,
     semantic: &SemanticCallable<'_>,
     use_fact: &UseAst,
-    use_id: &str,
+    use_id: NodeId,
 ) {
     let source_id = containing_statement_id(semantic, use_fact.source_span)
         .or_else(|| containing_call_site_id(context, semantic, use_fact.source_span))
-        .unwrap_or_else(|| semantic.callable().callable_id.clone());
+        .unwrap_or_else(|| semantic.callable().callable_id);
     insert_edge(
         graph,
         graph_edge(
             edge_id("uses", source_id, use_id, &use_fact.name),
             EdgeKind::Uses,
             source_id,
-            use_id.to_string(),
+            use_id,
             node_owner(semantic),
             Some(use_fact.source_span),
             Confidence::Exact,
             inference_evidence("use is owned by nearest normalized statement/call or callable"),
             EdgeFact::Uses(sg::Uses {
-                callable_id: semantic.callable().callable_id.clone(),
-                use_id: use_id.to_string(),
+                callable_id: semantic.callable().callable_id,
+                use_id,
                 name: use_fact.name.clone(),
             }),
         ),
@@ -200,15 +200,15 @@ fn emit_value_instance_flows(
     uses: &[&UseAst],
     returns: &[&crate::ast::ReturnAst],
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let expressions = expressions_for_callable(graph, index, callable_id);
     let expression_by_id = expressions
         .iter()
-        .map(|expression| (expression.expression_id.clone(), expression.clone()))
+        .map(|expression| (expression.expression_id, expression.clone()))
         .collect::<BTreeMap<_, _>>();
 
     for expression in &expressions {
-        let Some(target_id) = expression.value_id.as_deref() else {
+        let Some(target_id) = expression.value_id else {
             continue;
         };
         if !index.has_value(target_id) {
@@ -259,7 +259,7 @@ fn emit_value_instance_flows(
             let Some(child) = expression_by_id.get(child_id) else {
                 continue;
             };
-            let Some(source_id) = child.value_id.as_deref() else {
+            let Some(source_id) = child.value_id else {
                 continue;
             };
             if source_id == target_id || !index.has_value(source_id) {
@@ -293,8 +293,8 @@ fn emit_value_instance_flows(
         add_value_data_flow_edge(
             graph,
             semantic,
-            &reaching_use.definition_value_id,
-            &reaching_use.use_value_id,
+            reaching_use.definition_value_id,
+            reaching_use.use_value_id,
             &reaching_use.name,
             flow_kind,
             Some(reaching_use.use_span),
@@ -330,8 +330,8 @@ fn emit_value_instance_flows(
         add_value_data_flow_edge(
             graph,
             semantic,
-            &source_id,
-            &return_value_id,
+            source_id,
+            return_value_id,
             return_fact.value.as_deref().unwrap_or("return"),
             DataFlowKind::ReturnValue,
             Some(return_fact.source_span),
@@ -349,11 +349,11 @@ fn emit_field_index_alias_flows(
     semantic: &SemanticCallable<'_>,
     definitions: &[&DefinitionAst],
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let expressions = expressions_for_callable(graph, index, callable_id);
     let expression_by_id = expressions
         .iter()
-        .map(|expression| (expression.expression_id.clone(), expression.clone()))
+        .map(|expression| (expression.expression_id, expression.clone()))
         .collect::<BTreeMap<_, _>>();
     let access_expressions = access_expressions_by_span(graph, index, callable_id);
     let assignment_targets = assignment_targets(index, &expressions, &expression_by_id);
@@ -367,7 +367,7 @@ fn emit_field_index_alias_flows(
         let Some(expression) = access_expressions.get(&field.source_span) else {
             continue;
         };
-        let Some(value_id) = expression.value_id.clone() else {
+        let Some(value_id) = expression.value_id else {
             continue;
         };
         let is_write = assignment_targets.contains(&expression.expression_id)
@@ -378,7 +378,7 @@ fn emit_field_index_alias_flows(
         records.push(AccessRecord {
             kind: AccessRecordKind::Field,
             span: field.source_span,
-            expression_id: expression.expression_id.clone(),
+            expression_id: expression.expression_id,
             value_id,
             key: AccessKey::field(field),
             member: Some(field.field.clone()),
@@ -395,13 +395,13 @@ fn emit_field_index_alias_flows(
         let Some(expression) = access_expressions.get(&index.source_span) else {
             continue;
         };
-        let Some(value_id) = expression.value_id.clone() else {
+        let Some(value_id) = expression.value_id else {
             continue;
         };
         records.push(AccessRecord {
             kind: AccessRecordKind::Index,
             span: index.source_span,
-            expression_id: expression.expression_id.clone(),
+            expression_id: expression.expression_id,
             value_id,
             key: AccessKey::index(index),
             member: index.index.clone(),
@@ -428,8 +428,7 @@ fn emit_access_write_value_flows(
         };
         let Some(parent) = expression
             .parent_expression_id
-            .as_deref()
-            .and_then(|parent_id| expression_by_id.get(parent_id))
+            .and_then(|parent_id| expression_by_id.get(&parent_id))
             .filter(|parent| parent.kind == ExpressionKind::Assignment)
         else {
             continue;
@@ -437,7 +436,7 @@ fn emit_access_write_value_flows(
         for child_id in parent.child_expression_ids.iter().skip(1) {
             let Some(source_id) = expression_by_id
                 .get(child_id)
-                .and_then(|child| child.value_id.as_deref())
+                .and_then(|child| child.value_id)
             else {
                 continue;
             };
@@ -448,7 +447,7 @@ fn emit_access_write_value_flows(
                 graph,
                 semantic,
                 source_id,
-                &record.value_id,
+                record.value_id,
                 record.flow_name(),
                 record.flow_kind(),
                 Some(record.span),
@@ -478,8 +477,8 @@ fn emit_exact_access_read_summaries(
             add_value_data_flow_edge(
                 graph,
                 semantic,
-                &write.value_id,
-                &read.value_id,
+                write.value_id,
+                read.value_id,
                 read.flow_name(),
                 read.flow_kind(),
                 Some(read.span),
@@ -510,8 +509,8 @@ fn emit_alias_uncertain_access_summaries(
             add_value_data_flow_edge(
                 graph,
                 semantic,
-                &write.value_id,
-                &read.value_id,
+                write.value_id,
+                read.value_id,
                 read.flow_name(),
                 read.flow_kind(),
                 Some(read.span),
@@ -522,7 +521,7 @@ fn emit_alias_uncertain_access_summaries(
                 graph,
                 semantic,
                 Some(read.span),
-                vec![write.expression_id.clone(), read.expression_id.clone()],
+                vec![write.expression_id, read.expression_id],
                 &format!(
                     "{} access may alias another base with the same member/key",
                     read.label()
@@ -542,7 +541,7 @@ fn emit_dynamic_access_diagnostics(
             graph,
             semantic,
             Some(record.span),
-            vec![record.expression_id.clone()],
+            vec![record.expression_id],
             &format!(
                 "{} access has dynamic or unsupported alias identity; summary flow is uncertain",
                 record.label()
@@ -640,7 +639,7 @@ fn normalized_alias_subject(text: &str) -> Option<String> {
 fn access_expressions_by_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> BTreeMap<SourceSpan, sg::Expression> {
     expressions_for_callable(graph, index, callable_id)
         .into_iter()
@@ -676,7 +675,7 @@ fn assignment_targets(
             )
         })
         .filter(|target| index.expression_span(target.expression_id).is_some())
-        .map(|target| target.expression_id.clone())
+        .map(|target| target.expression_id)
         .collect()
 }
 
@@ -687,9 +686,8 @@ fn add_alias_uncertainty_diagnostic(
     related: Vec<NodeId>,
     message: &str,
 ) {
-    let diagnostic_id = stable_id(
-        "diagnostic",
-        &[
+    let diagnostic_id = stable_id(Tag::Diagnostic,
+        id_parts![
             &semantic.callable().callable_id,
             "sg073-alias-uncertainty",
             &span.map(span_key).unwrap_or_default(),
@@ -699,7 +697,7 @@ fn add_alias_uncertainty_diagnostic(
     insert_node(
         graph,
         graph_node(
-            diagnostic_id.clone(),
+            diagnostic_id,
             NodeKind::Diagnostic,
             node_owner(semantic),
             span,
@@ -710,7 +708,7 @@ fn add_alias_uncertainty_diagnostic(
                 kind: DiagnosticKind::AliasUncertainty,
                 severity: Severity::Warning,
                 message: message.to_string(),
-                artifact_id: Some(semantic.artifact().artifact_id.clone()),
+                artifact_id: Some(semantic.artifact().artifact_id),
                 span,
                 related,
             }),
@@ -773,14 +771,14 @@ fn cfg_reaching_definition_analysis(
     definitions: &[&DefinitionAst],
     uses: &[&UseAst],
 ) -> Option<ReachingDefinitionAnalysis> {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let cfg = callable_cfg_indexed(graph, index, callable_id)?;
 
     let definition_records = definitions
         .iter()
         .filter_map(|definition| {
             let cfg_node_id = if definition.kind == AstDefinitionKind::Parameter {
-                cfg.entry_node_id.clone()
+                cfg.entry_node_id
             } else {
                 executable_cfg_node_for_span(graph, index, callable_id, definition.source_span)?
             };
@@ -795,7 +793,7 @@ fn cfg_reaching_definition_analysis(
         .collect::<Vec<_>>();
     let definitions_by_id = definition_records
         .iter()
-        .map(|definition| (definition.definition_id.clone(), definition.clone()))
+        .map(|definition| (definition.definition_id, definition.clone()))
         .collect::<BTreeMap<_, _>>();
 
     let use_records = uses
@@ -818,15 +816,15 @@ fn cfg_reaching_definition_analysis(
     let mut gen_by_node = BTreeMap::<NodeId, BTreeSet<NodeId>>::new();
     let mut kill_names_by_node = BTreeMap::<NodeId, BTreeSet<String>>::new();
     for definition in &definition_records {
-        if !cfg.is_reachable(&definition.cfg_node_id) {
+        if !cfg.is_reachable(definition.cfg_node_id) {
             continue;
         }
         gen_by_node
-            .entry(definition.cfg_node_id.clone())
+            .entry(definition.cfg_node_id)
             .or_default()
-            .insert(definition.definition_id.clone());
+            .insert(definition.definition_id);
         kill_names_by_node
-            .entry(definition.cfg_node_id.clone())
+            .entry(definition.cfg_node_id)
             .or_default()
             .insert(definition.name.clone());
     }
@@ -837,7 +835,7 @@ fn cfg_reaching_definition_analysis(
             by_name
                 .entry(definition.name.clone())
                 .or_default()
-                .insert(definition.definition_id.clone());
+                .insert(definition.definition_id);
             by_name
         },
     );
@@ -845,17 +843,17 @@ fn cfg_reaching_definition_analysis(
     let mut in_sets = cfg
         .reachable_node_ids
         .iter()
-        .map(|node_id| (node_id.clone(), BTreeSet::<NodeId>::new()))
+        .map(|&node_id| (node_id, BTreeSet::<NodeId>::new()))
         .collect::<BTreeMap<_, _>>();
     let mut out_sets = in_sets.clone();
     let mut changed = true;
     while changed {
         changed = false;
-        for node_id in &cfg.reachable_node_ids {
+        for &node_id in &cfg.reachable_node_ids {
             let next_in = cfg
                 .predecessors_of(node_id)
                 .into_iter()
-                .filter(|predecessor| cfg.is_reachable(predecessor))
+                .filter(|predecessor| cfg.is_reachable(*predecessor))
                 .filter_map(|predecessor| out_sets.get(&predecessor))
                 .fold(BTreeSet::new(), |mut reaching, predecessor_out| {
                     reaching.extend(predecessor_out.iter().cloned());
@@ -863,7 +861,7 @@ fn cfg_reaching_definition_analysis(
                 });
 
             let mut next_out = next_in.clone();
-            if let Some(kill_names) = kill_names_by_node.get(node_id) {
+            if let Some(kill_names) = kill_names_by_node.get(&node_id) {
                 for name in kill_names {
                     if let Some(killed_definition_ids) = all_definition_ids_by_name.get(name) {
                         for definition_id in killed_definition_ids {
@@ -872,16 +870,16 @@ fn cfg_reaching_definition_analysis(
                     }
                 }
             }
-            if let Some(generated) = gen_by_node.get(node_id) {
+            if let Some(generated) = gen_by_node.get(&node_id) {
                 next_out.extend(generated.iter().cloned());
             }
 
-            if in_sets.get(node_id) != Some(&next_in) {
-                in_sets.insert(node_id.clone(), next_in);
+            if in_sets.get(&node_id) != Some(&next_in) {
+                in_sets.insert(node_id, next_in);
                 changed = true;
             }
-            if out_sets.get(node_id) != Some(&next_out) {
-                out_sets.insert(node_id.clone(), next_out);
+            if out_sets.get(&node_id) != Some(&next_out) {
+                out_sets.insert(node_id, next_out);
                 changed = true;
             }
         }
@@ -900,11 +898,11 @@ fn reaching_uses_from_analysis(analysis: ReachingDefinitionAnalysis) -> Vec<Reac
     analysis
         .use_records
         .iter()
-        .filter(|use_record| analysis.cfg.is_reachable(&use_record.cfg_node_id))
+        .filter(|use_record| analysis.cfg.is_reachable(use_record.cfg_node_id))
         .filter_map(|use_record| {
             Some((
                 use_record,
-                use_record.value_id.clone()?,
+                use_record.value_id?,
                 analysis.in_sets.get(&use_record.cfg_node_id)?,
             ))
         })
@@ -914,7 +912,7 @@ fn reaching_uses_from_analysis(analysis: ReachingDefinitionAnalysis) -> Vec<Reac
                 .filter_map(|definition_id| analysis.definitions_by_id.get(definition_id))
                 .filter(move |definition| definition.name == use_record.name)
                 .filter_map(move |definition| {
-                    let definition_value_id = definition.value_id.clone()?;
+                    let definition_value_id = definition.value_id?;
                     if definition_value_id == use_value_id {
                         return None;
                     }
@@ -922,7 +920,7 @@ fn reaching_uses_from_analysis(analysis: ReachingDefinitionAnalysis) -> Vec<Reac
                         name: use_record.name.clone(),
                         use_span: use_record.span,
                         definition_value_id,
-                        use_value_id: use_value_id.clone(),
+                        use_value_id,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -954,12 +952,12 @@ fn emit_branch_merge_value_flows(
     semantic: &SemanticCallable<'_>,
     analysis: &ReachingDefinitionAnalysis,
 ) -> BTreeMap<(NodeId, String), MergeValueRecord> {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let cfg_nodes = cfg_nodes_by_id(graph, index, callable_id);
     let mut merge_values = BTreeMap::new();
 
-    for cfg_node_id in &analysis.cfg.reachable_node_ids {
-        let Some((cfg_node, span)) = cfg_nodes.get(cfg_node_id) else {
+    for &cfg_node_id in &analysis.cfg.reachable_node_ids {
+        let Some((cfg_node, span)) = cfg_nodes.get(&cfg_node_id) else {
             continue;
         };
         if cfg_node.role != ControlFlowNodeRole::Merge
@@ -968,7 +966,7 @@ fn emit_branch_merge_value_flows(
             continue;
         }
         let reaching_by_name = reaching_value_definitions_by_name(
-            analysis.in_sets.get(cfg_node_id).into_iter().flatten(),
+            analysis.in_sets.get(&cfg_node_id).into_iter().flatten(),
             &analysis.definitions_by_id,
         );
         for (name, reaching_definitions) in reaching_by_name {
@@ -979,7 +977,7 @@ fn emit_branch_merge_value_flows(
             insert_merge_value_node(
                 graph,
                 semantic,
-                value_id.clone(),
+                value_id,
                 Some(name.clone()),
                 *span,
                 "SG-072 explicit branch merge value from multiple reaching definitions",
@@ -988,8 +986,8 @@ fn emit_branch_merge_value_flows(
                 add_value_data_flow_edge(
                     graph,
                     semantic,
-                    &definition.value_id,
-                    &value_id,
+                    definition.value_id,
+                    value_id,
                     &name,
                     DataFlowKind::MergeValue,
                     *span,
@@ -998,13 +996,13 @@ fn emit_branch_merge_value_flows(
                 );
             }
             merge_values.insert(
-                (cfg_node_id.clone(), name.clone()),
+                (cfg_node_id, name.clone()),
                 MergeValueRecord {
                     value_id,
                     name,
                     reaching_definition_ids: reaching_definitions
                         .iter()
-                        .map(|definition| definition.definition_id.clone())
+                        .map(|definition| definition.definition_id)
                         .collect(),
                 },
             );
@@ -1021,15 +1019,15 @@ fn emit_merge_value_use_flows(
     merge_values: &BTreeMap<(NodeId, String), MergeValueRecord>,
 ) {
     for use_record in &analysis.use_records {
-        let Some(use_value_id) = use_record.value_id.as_deref() else {
+        let Some(use_value_id) = use_record.value_id else {
             continue;
         };
         let Some(use_reaching_ids) = analysis.in_sets.get(&use_record.cfg_node_id) else {
             continue;
         };
-        for predecessor_id in analysis.cfg.predecessors_of(&use_record.cfg_node_id) {
+        for predecessor_id in analysis.cfg.predecessors_of(use_record.cfg_node_id) {
             let Some(merge_record) =
-                merge_values.get(&(predecessor_id.clone(), use_record.name.clone()))
+                merge_values.get(&(predecessor_id, use_record.name.clone()))
             else {
                 continue;
             };
@@ -1040,7 +1038,7 @@ fn emit_merge_value_use_flows(
                 add_value_data_flow_edge(
                     graph,
                     semantic,
-                    &merge_record.value_id,
+                    merge_record.value_id,
                     use_value_id,
                     &merge_record.name,
                     DataFlowKind::MergeValue,
@@ -1059,13 +1057,13 @@ fn emit_loop_carried_value_flows(
     semantic: &SemanticCallable<'_>,
     analysis: &ReachingDefinitionAnalysis,
 ) -> BTreeMap<(NodeId, String), LoopCarriedValueRecord> {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let cfg_nodes = cfg_nodes_by_id(graph, index, callable_id);
     let loop_back_predecessors = loop_back_predecessors_by_target(graph, index, callable_id);
     let mut loop_values = BTreeMap::new();
 
     for (condition_id, backedge_predecessors) in loop_back_predecessors {
-        if !analysis.cfg.is_reachable(&condition_id) {
+        if !analysis.cfg.is_reachable(condition_id) {
             continue;
         }
         let Some((cfg_node, span)) = cfg_nodes.get(&condition_id) else {
@@ -1095,11 +1093,11 @@ fn emit_loop_carried_value_flows(
             if backedge_definitions.is_empty() || all_definitions.len() < 2 {
                 continue;
             }
-            let value_id = sg072_loop_value_id(callable_id, &condition_id, &name);
+            let value_id = sg072_loop_value_id(callable_id, condition_id, &name);
             insert_merge_value_node(
                 graph,
                 semantic,
-                value_id.clone(),
+                value_id,
                 Some(format!("loop-carried:{name}")),
                 *span,
                 "SG-072 explicit loop-carried value from loop backedge reaching definitions",
@@ -1108,8 +1106,8 @@ fn emit_loop_carried_value_flows(
                 add_value_data_flow_edge(
                     graph,
                     semantic,
-                    &definition.value_id,
-                    &value_id,
+                    definition.value_id,
+                    value_id,
                     &name,
                     DataFlowKind::LoopCarriedValue,
                     *span,
@@ -1118,17 +1116,17 @@ fn emit_loop_carried_value_flows(
                 );
             }
             loop_values.insert(
-                (condition_id.clone(), name.clone()),
+                (condition_id, name.clone()),
                 LoopCarriedValueRecord {
                     value_id,
                     name,
                     reaching_definition_ids: all_definitions
                         .iter()
-                        .map(|definition| definition.definition_id.clone())
+                        .map(|definition| definition.definition_id)
                         .collect(),
                     backedge_definition_ids: backedge_definitions
                         .iter()
-                        .map(|definition| definition.definition_id.clone())
+                        .map(|definition| definition.definition_id)
                         .collect(),
                 },
             );
@@ -1145,7 +1143,7 @@ fn emit_loop_carried_use_flows(
     loop_values: &BTreeMap<(NodeId, String), LoopCarriedValueRecord>,
 ) {
     for use_record in &analysis.use_records {
-        let Some(use_value_id) = use_record.value_id.as_deref() else {
+        let Some(use_value_id) = use_record.value_id else {
             continue;
         };
         let Some(use_reaching_ids) = analysis.in_sets.get(&use_record.cfg_node_id) else {
@@ -1165,7 +1163,7 @@ fn emit_loop_carried_use_flows(
                 add_value_data_flow_edge(
                     graph,
                     semantic,
-                    &loop_record.value_id,
+                    loop_record.value_id,
                     use_value_id,
                     &loop_record.name,
                     DataFlowKind::LoopCarriedValue,
@@ -1208,13 +1206,13 @@ fn reaching_value_definitions_by_name<'a>(
         let Some(definition) = definitions_by_id.get(definition_id) else {
             continue;
         };
-        let Some(value_id) = definition.value_id.clone() else {
+        let Some(value_id) = definition.value_id else {
             continue;
         };
         by_name.entry(definition.name.clone()).or_default().insert(
-            definition.definition_id.clone(),
+            definition.definition_id,
             ReachingValueDefinition {
-                definition_id: definition.definition_id.clone(),
+                definition_id: definition.definition_id,
                 value_id,
             },
         );
@@ -1236,7 +1234,7 @@ fn insert_merge_value_node(
     insert_node(
         graph,
         graph_node(
-            value_id.clone(),
+            value_id,
             NodeKind::Value,
             node_owner(semantic),
             span,
@@ -1244,7 +1242,7 @@ fn insert_merge_value_node(
             inference_evidence(evidence),
             NodeFact::Value(sg::Value {
                 value_id,
-                callable_id: Some(semantic.callable().callable_id.clone()),
+                callable_id: Some(semantic.callable().callable_id),
                 kind: ValueKind::Merge,
                 role: ValueRole::Unknown,
                 symbol_id: None,
@@ -1263,13 +1261,13 @@ fn insert_merge_value_node(
 fn cfg_nodes_by_id(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> BTreeMap<NodeId, (sg::ControlFlowNode, Option<SourceSpan>)> {
     index
         .nodes(graph, callable_id)
         .filter_map(|node| match &node.fact {
             NodeFact::ControlFlow(control) => {
-                Some((control.cfg_node_id.clone(), (control.clone(), node.span)))
+                Some((control.cfg_node_id, (control.clone(), node.span)))
             }
             _ => None,
         })
@@ -1279,7 +1277,7 @@ fn cfg_nodes_by_id(
 fn loop_back_predecessors_by_target(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> BTreeMap<NodeId, BTreeSet<NodeId>> {
     let mut predecessors = BTreeMap::<NodeId, BTreeSet<NodeId>>::new();
     for edge in index.control_flow_edges(graph, callable_id) {
@@ -1293,25 +1291,24 @@ fn loop_back_predecessors_by_target(
                     sg::ControlFlowOutcome::LoopBack | sg::ControlFlowOutcome::Continue
                 ))
         {
-            if let Some(target_id) = &edge.target_id {
+            if let Some(target_id) = edge.target_id {
                 predecessors
-                    .entry(target_id.clone())
+                    .entry(target_id)
                     .or_default()
-                    .insert(edge.source_id.clone());
+                    .insert(edge.source_id);
             }
         }
     }
     predecessors
 }
 
-fn sg072_merge_value_id(callable_id: &str, cfg_node_id: &str, name: &str) -> NodeId {
-    stable_id("value", &[callable_id, "sg072-merge", cfg_node_id, name])
+fn sg072_merge_value_id(callable_id: NodeId, cfg_node_id: NodeId, name: &str) -> NodeId {
+    stable_id(Tag::Value, id_parts![callable_id, "sg072-merge", cfg_node_id, name])
 }
 
-fn sg072_loop_value_id(callable_id: &str, cfg_node_id: &str, name: &str) -> NodeId {
-    stable_id(
-        "value",
-        &[callable_id, "sg072-loop-carried", cfg_node_id, name],
+fn sg072_loop_value_id(callable_id: NodeId, cfg_node_id: NodeId, name: &str) -> NodeId {
+    stable_id(Tag::Value,
+        id_parts![callable_id, "sg072-loop-carried", cfg_node_id, name],
     )
 }
 
@@ -1321,7 +1318,7 @@ fn nearest_prior_reaching_uses(
     definitions: &[&DefinitionAst],
     uses: &[&UseAst],
 ) -> Vec<ReachingUse> {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let definitions_by_name = definitions.iter().fold(
         BTreeMap::<String, Vec<&DefinitionAst>>::new(),
         |mut by_name, definition| {
@@ -1358,7 +1355,7 @@ fn emit_merge_placeholder_values(
     index: &CallableIndex,
     semantic: &SemanticCallable<'_>,
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let cfg_nodes = index
         .nodes(graph, callable_id)
         .filter_map(|node| match &node.fact {
@@ -1383,9 +1380,8 @@ fn emit_merge_placeholder_values(
         if cfg.role != ControlFlowNodeRole::Merge {
             continue;
         }
-        let value_id = stable_id(
-            "value",
-            &[callable_id, "sg070-merge-placeholder", &cfg.cfg_node_id],
+        let value_id = stable_id(Tag::Value,
+            id_parts![callable_id, "sg070-merge-placeholder", cfg.cfg_node_id],
         );
         insert_node(
             graph,
@@ -1399,11 +1395,10 @@ fn emit_merge_placeholder_values(
                     "SG-070 uncertain merge value placeholder; CFG-aware reaching definitions are SG-071/SG-072",
                 ),
                 NodeFact::Value(sg::Value {
-                    value_id: stable_id(
-                        "value",
-                        &[callable_id, "sg070-merge-placeholder", &cfg.cfg_node_id],
+                    value_id: stable_id(Tag::Value,
+                        id_parts![callable_id, "sg070-merge-placeholder", cfg.cfg_node_id],
                     ),
-                    callable_id: Some(callable_id.to_string()),
+                    callable_id: Some(callable_id),
                     kind: ValueKind::Merge,
                     role: ValueRole::Unknown,
                     symbol_id: None,
@@ -1420,18 +1415,17 @@ fn emit_merge_placeholder_values(
     }
 
     for (statement, owner, span) in statements {
-        let value_id = stable_id(
-            "value",
-            &[
+        let value_id = stable_id(Tag::Value,
+            id_parts![
                 callable_id,
                 "sg070-loop-carried-placeholder",
-                &statement.statement_id,
+                statement.statement_id,
             ],
         );
         insert_node(
             graph,
             graph_node(
-                value_id.clone(),
+                value_id,
                 NodeKind::Value,
                 owner,
                 span,
@@ -1441,7 +1435,7 @@ fn emit_merge_placeholder_values(
                 ),
                 NodeFact::Value(sg::Value {
                     value_id,
-                    callable_id: Some(callable_id.to_string()),
+                    callable_id: Some(callable_id),
                     kind: ValueKind::Merge,
                     role: ValueRole::Unknown,
                     symbol_id: None,
@@ -1461,8 +1455,8 @@ fn emit_merge_placeholder_values(
 fn add_value_data_flow_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    source_id: &str,
-    target_id: &str,
+    source_id: NodeId,
+    target_id: NodeId,
     name: &str,
     flow_kind: DataFlowKind,
     span: Option<SourceSpan>,
@@ -1479,14 +1473,14 @@ fn add_value_data_flow_edge(
                 &format!("{name}:{flow_kind:?}:{precision}"),
             ),
             EdgeKind::DataFlow,
-            source_id.to_string(),
-            target_id.to_string(),
+            source_id,
+            target_id,
             node_owner(semantic),
             span,
             confidence,
             inference_evidence(precision),
             EdgeFact::DataFlow(sg::DataFlow {
-                callable_id: semantic.callable().callable_id.clone(),
+                callable_id: semantic.callable().callable_id,
                 name: name.to_string(),
                 flow_kind,
                 precision: precision.to_string(),
@@ -1498,7 +1492,7 @@ fn add_value_data_flow_edge(
 fn expressions_for_callable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Vec<sg::Expression> {
     let mut expressions = index
         .nodes(graph, callable_id)
@@ -1514,7 +1508,7 @@ fn expressions_for_callable(
                 .map(|span| span.start_byte)
                 .unwrap_or(usize::MAX),
             expression.ordinal,
-            expression.expression_id.clone(),
+            expression.expression_id,
         )
     });
     expressions
@@ -1533,7 +1527,7 @@ fn expression_value_name(expression: &sg::Expression) -> &str {
 fn role_value_for_expression(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     enclosing_span: SourceSpan,
     role: ValueRole,
 ) -> Option<NodeId> {
@@ -1546,7 +1540,7 @@ fn role_value_for_expression(
                         .span
                         .is_some_and(|span| span_contains(enclosing_span, span)) =>
             {
-                Some(value.value_id.clone())
+                Some(value.value_id)
             }
             _ => None,
         })
@@ -1555,7 +1549,7 @@ fn role_value_for_expression(
 fn expression_value_for_text_in_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     text: Option<&str>,
     enclosing_span: SourceSpan,
 ) -> Option<NodeId> {
@@ -1575,7 +1569,7 @@ fn expression_value_for_text_in_span(
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
                 .unwrap_or(usize::MAX)
         })
-        .and_then(|(_, expression)| expression.value_id.clone())
+        .and_then(|(_, expression)| expression.value_id)
 }
 
 fn nearest_prior_definition<'a>(
@@ -1597,7 +1591,7 @@ fn nearest_prior_definition<'a>(
 fn executable_cfg_node_for_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     span: SourceSpan,
 ) -> Option<NodeId> {
     index
@@ -1626,7 +1620,7 @@ fn executable_cfg_node_for_span(
                     | ControlFlowNodeRole::Merge => 2,
                 };
                 Some((
-                    control.cfg_node_id.clone(),
+                    control.cfg_node_id,
                     cfg_span.end_byte.saturating_sub(cfg_span.start_byte),
                     role_priority,
                     cfg_span.start_byte,
@@ -1653,7 +1647,7 @@ fn containing_statement_id(semantic: &SemanticCallable<'_>, span: SourceSpan) ->
                 .end_byte
                 .saturating_sub(statement.source_span.start_byte)
         })
-        .map(|statement| super::cfg::statement_node_id(&semantic.callable().callable_id, statement))
+        .map(|statement| super::cfg::statement_node_id(semantic.callable().callable_id, statement))
 }
 
 fn containing_call_site_id(
@@ -1668,7 +1662,7 @@ fn containing_call_site_id(
         .find_map(|call| {
             context
                 .call_site_for(semantic.callable().callable_id, call)
-                .map(|call_site| call_site.call_site_id.clone())
+                .map(|call_site| call_site.call_site_id)
         })
 }
 
@@ -1688,6 +1682,7 @@ mod tests {
         ProgramDependenceGraphView, ProgramSupergraph, Uncertainty, ValueKind, ValueLiteral,
         ValueRole,
     };
+    use crate::supergraph::{NodeId, ids::callable_id_from_text};
 
     #[test]
     fn sg070_python_value_instance_data_flow_connects_values() {
@@ -1777,9 +1772,9 @@ mod tests {
         assert!(!sg070_edges.is_empty(), "missing SG-070 value flows");
 
         for edge in &sg070_edges {
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
-                edge.target_id.as_ref().and_then(|id| node_kind(graph, id)),
+                edge.target_id.as_ref().and_then(|id| node_kind(graph, *id)),
                 Some(NodeKind::Value),
                 "SG-070 DataFlow target should be a value"
             );
@@ -1837,31 +1832,31 @@ mod tests {
         let edges = sg071_value_edges(graph);
 
         let branch_use = use_value_at(graph, span(101, 102));
-        assert_reaches(graph, &edges, span(35, 40), &branch_use);
-        assert_reaches(graph, &edges, span(65, 70), &branch_use);
-        assert_not_reaches(graph, &edges, span(10, 15), &branch_use);
+        assert_reaches(graph, &edges, span(35, 40), branch_use);
+        assert_reaches(graph, &edges, span(65, 70), branch_use);
+        assert_not_reaches(graph, &edges, span(10, 15), branch_use);
 
         let loop_rhs_use = use_value_at(graph, span(215, 216));
-        assert_reaches(graph, &edges, span(35, 40), &loop_rhs_use);
-        assert_reaches(graph, &edges, span(65, 70), &loop_rhs_use);
-        assert_reaches(graph, &edges, span(211, 220), &loop_rhs_use);
-        assert_not_reaches(graph, &edges, span(145, 151), &loop_rhs_use);
-        assert_not_reaches(graph, &edges, span(175, 181), &loop_rhs_use);
+        assert_reaches(graph, &edges, span(35, 40), loop_rhs_use);
+        assert_reaches(graph, &edges, span(65, 70), loop_rhs_use);
+        assert_reaches(graph, &edges, span(211, 220), loop_rhs_use);
+        assert_not_reaches(graph, &edges, span(145, 151), loop_rhs_use);
+        assert_not_reaches(graph, &edges, span(175, 181), loop_rhs_use);
 
         let after_loop_use = use_value_at(graph, span(236, 237));
-        assert_reaches(graph, &edges, span(35, 40), &after_loop_use);
-        assert_reaches(graph, &edges, span(65, 70), &after_loop_use);
-        assert_reaches(graph, &edges, span(130, 135), &after_loop_use);
-        assert_reaches(graph, &edges, span(160, 165), &after_loop_use);
-        assert_reaches(graph, &edges, span(211, 220), &after_loop_use);
-        assert_not_reaches(graph, &edges, span(145, 151), &after_loop_use);
-        assert_not_reaches(graph, &edges, span(175, 181), &after_loop_use);
+        assert_reaches(graph, &edges, span(35, 40), after_loop_use);
+        assert_reaches(graph, &edges, span(65, 70), after_loop_use);
+        assert_reaches(graph, &edges, span(130, 135), after_loop_use);
+        assert_reaches(graph, &edges, span(160, 165), after_loop_use);
+        assert_reaches(graph, &edges, span(211, 220), after_loop_use);
+        assert_not_reaches(graph, &edges, span(145, 151), after_loop_use);
+        assert_not_reaches(graph, &edges, span(175, 181), after_loop_use);
 
         let after_return_branch_use = use_value_at(graph, span(326, 327));
-        assert_not_reaches(graph, &edges, span(275, 280), &after_return_branch_use);
+        assert_not_reaches(graph, &edges, span(275, 280), after_return_branch_use);
 
         let return_use = use_value_at(graph, span(352, 353));
-        assert_not_reaches(graph, &edges, span(365, 371), &return_use);
+        assert_not_reaches(graph, &edges, span(365, 371), return_use);
 
         assert!(
             graph.edges.iter().any(|edge| matches!(
@@ -1875,8 +1870,8 @@ mod tests {
         assert!(
             graph.edges.iter().all(|edge| match &edge.fact {
                 EdgeFact::DataFlow(data_flow) if data_flow.precision == super::SG071_PRECISION => {
-                    node_kind(graph, &edge.source_id) == Some(NodeKind::Value)
-                        && edge.target_id.as_ref().and_then(|id| node_kind(graph, id))
+                    node_kind(graph, edge.source_id) == Some(NodeKind::Value)
+                        && edge.target_id.as_ref().and_then(|id| node_kind(graph, *id))
                             == Some(NodeKind::Value)
                 }
                 _ => true,
@@ -1893,13 +1888,13 @@ mod tests {
         let branch_right = definition_value_at(graph, span(65, 70));
         let branch_use = use_value_at(graph, span(101, 102));
         let branch_merge =
-            merge_value_between_and_use(&merge_edges, &branch_left, &branch_right, &branch_use);
-        assert_merge_value_node(graph, &branch_merge);
+            merge_value_between_and_use(&merge_edges, branch_left, branch_right, branch_use);
+        assert_merge_value_node(graph, branch_merge);
 
         let loop_update = definition_value_at(graph, span(211, 220));
         let loop_rhs_use = use_value_at(graph, span(215, 216));
         let after_loop_use = use_value_at(graph, span(236, 237));
-        let loop_carried = loop_carried_value_reached_by(&loop_edges, &loop_update);
+        let loop_carried = loop_carried_value_reached_by(&loop_edges, loop_update);
         assert!(
             loop_edges.contains(&(loop_carried.clone(), loop_rhs_use)),
             "loop update should feed later iterations through a loop-carried value"
@@ -1956,9 +1951,9 @@ mod tests {
         assert!(!sg073_edges.is_empty(), "missing SG-073 value flows");
 
         for edge in &sg073_edges {
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
-                edge.target_id.as_ref().and_then(|id| node_kind(graph, id)),
+                edge.target_id.as_ref().and_then(|id| node_kind(graph, *id)),
                 Some(NodeKind::Value),
                 "SG-073 DataFlow target should be a value"
             );
@@ -1994,10 +1989,10 @@ mod tests {
             "possible alias read should receive an uncertain same-member summary"
         );
 
-        assert_reachable_forward(&edges, &seed_use, &field_read);
-        assert_reachable_backward(&edges, &field_read, &seed_use);
-        assert_reachable_forward(&edges, &read_use, &index_read);
-        assert_reachable_backward(&edges, &index_read, &read_use);
+        assert_reachable_forward(&edges, seed_use, field_read);
+        assert_reachable_backward(&edges, field_read, seed_use);
+        assert_reachable_forward(&edges, read_use, index_read);
+        assert_reachable_backward(&edges, index_read, read_use);
 
         assert!(
             graph.nodes.iter().any(|node| matches!(
@@ -2014,7 +2009,7 @@ mod tests {
                 EdgeFact::DataFlow(data_flow)
                     if data_flow.precision == super::SG073_ALIAS_PRECISION
                         && edge.source_id == field_write
-                        && edge.target_id.as_deref() == Some(alias_read.as_str())
+                        && edge.target_id == Some(alias_read)
             )),
             "possible alias summary should carry SG-073 alias precision"
         );
@@ -2045,10 +2040,10 @@ mod tests {
         let done_guard = definition_value_at(graph, span(21, 25));
 
         let merge_edges = sg072_value_edges(graph, DataFlowKind::MergeValue);
-        let branch_merge = merge_value_between_and_use(&merge_edges, &x_one, &x_two, &y_use);
+        let branch_merge = merge_value_between_and_use(&merge_edges, x_one, x_two, y_use);
         assert_value_node(
             graph,
-            &branch_merge,
+            branch_merge,
             ValueKind::Merge,
             ValueRole::Unknown,
             Some("x"),
@@ -2056,8 +2051,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &x_one,
-            &branch_merge,
+            x_one,
+            branch_merge,
             DataFlowKind::MergeValue,
             super::SG072_MERGE_PRECISION,
             Uncertainty::Possible,
@@ -2065,8 +2060,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &branch_merge,
-            &y_use,
+            branch_merge,
+            y_use,
             DataFlowKind::MergeValue,
             super::SG072_MERGE_PRECISION,
             Uncertainty::Possible,
@@ -2074,10 +2069,10 @@ mod tests {
         );
 
         let loop_edges = sg072_value_edges(graph, DataFlowKind::LoopCarriedValue);
-        let loop_carried = loop_carried_value_reached_by(&loop_edges, &x_update);
+        let loop_carried = loop_carried_value_reached_by(&loop_edges, x_update);
         assert_value_node(
             graph,
-            &loop_carried,
+            loop_carried,
             ValueKind::Merge,
             ValueRole::Unknown,
             Some("loop-carried:x"),
@@ -2085,8 +2080,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &x_update,
-            &loop_carried,
+            x_update,
+            loop_carried,
             DataFlowKind::LoopCarriedValue,
             super::SG072_LOOP_PRECISION,
             Uncertainty::Possible,
@@ -2094,8 +2089,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &loop_carried,
-            &loop_rhs,
+            loop_carried,
+            loop_rhs,
             DataFlowKind::LoopCarriedValue,
             super::SG072_LOOP_PRECISION,
             Uncertainty::Possible,
@@ -2103,8 +2098,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &loop_carried,
-            &after_loop_use,
+            loop_carried,
+            after_loop_use,
             DataFlowKind::LoopCarriedValue,
             super::SG072_LOOP_PRECISION,
             Uncertainty::Possible,
@@ -2113,15 +2108,15 @@ mod tests {
 
         assert_data_flow_edge(
             graph,
-            &x_three,
-            &return_use,
+            x_three,
+            return_use,
             DataFlowKind::DefinitionToReturn,
             super::SG071_PRECISION,
             Uncertainty::Exact,
             Some(span(297, 298)),
         );
         assert!(
-            !dfg.value_backward_slice(&return_use)
+            !dfg.value_backward_slice(return_use)
                 .value_ids
                 .contains(&definition_value_at(graph, span(365, 371))),
             "backward slice from return use must exclude unreachable later definitions"
@@ -2129,7 +2124,7 @@ mod tests {
 
         let return_cfg = cfg_node_at_role(graph, span(290, 300), ControlFlowNodeRole::Return);
         let done_cfg = cfg_node_at_role(graph, span(263, 267), ControlFlowNodeRole::Condition);
-        let return_slice = pdg.return_backward_slice(&return_cfg);
+        let return_slice = pdg.return_backward_slice(return_cfg);
         assert!(return_slice.value_ids.contains(&x_three));
         assert!(return_slice.control_condition_ids.contains(&done_cfg));
         assert!(
@@ -2141,7 +2136,7 @@ mod tests {
         );
 
         let done_condition = condition_node_at(graph, span(263, 267));
-        let branch_slice = pdg.branch_backward_slice(&done_condition);
+        let branch_slice = pdg.branch_backward_slice(done_condition);
         assert!(branch_slice.value_ids.contains(&done_guard));
     }
 
@@ -2164,16 +2159,16 @@ mod tests {
 
         assert_value_node(
             graph,
-            &literal_one,
+            literal_one,
             ValueKind::Literal,
             ValueRole::Unknown,
             None,
             Uncertainty::Exact,
         );
-        assert_value_literal(graph, &literal_one, ValueLiteral::Integer("1".to_string()));
+        assert_value_literal(graph, literal_one, ValueLiteral::Integer("1".to_string()));
         assert_value_node(
             graph,
-            &call_result,
+            call_result,
             ValueKind::CallResult,
             ValueRole::CallResult,
             Some("send"),
@@ -2182,8 +2177,8 @@ mod tests {
 
         assert_data_flow_edge(
             graph,
-            &items_operand,
-            &index_read,
+            items_operand,
+            index_read,
             DataFlowKind::IndexAccess,
             "sg070-direct-index-value-without-index-alias-model",
             Uncertainty::Possible,
@@ -2191,8 +2186,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &index_operand,
-            &index_read,
+            index_operand,
+            index_read,
             DataFlowKind::IndexAccess,
             "sg070-direct-index-value-without-index-alias-model",
             Uncertainty::Possible,
@@ -2200,8 +2195,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &index_read,
-            &operator,
+            index_read,
+            operator,
             DataFlowKind::ExpressionOperand,
             "sg070-direct-expression-operand-value",
             Uncertainty::Exact,
@@ -2209,8 +2204,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &literal_one,
-            &operator,
+            literal_one,
+            operator,
             DataFlowKind::ExpressionOperand,
             "sg070-direct-expression-operand-value",
             Uncertainty::Exact,
@@ -2218,8 +2213,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &operator,
-            &total_def,
+            operator,
+            total_def,
             DataFlowKind::AssignmentValue,
             "sg070-direct-assignment-expression-value",
             Uncertainty::Exact,
@@ -2227,8 +2222,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &total_arg,
-            &call_expression,
+            total_arg,
+            call_expression,
             DataFlowKind::CallArgument,
             "sg070-direct-call-argument-to-call-result-value",
             Uncertainty::Probable,
@@ -2236,8 +2231,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &field_arg,
-            &call_expression,
+            field_arg,
+            call_expression,
             DataFlowKind::CallArgument,
             "sg070-direct-call-argument-to-call-result-value",
             Uncertainty::Probable,
@@ -2245,8 +2240,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &call_expression,
-            &sent_def,
+            call_expression,
+            sent_def,
             DataFlowKind::AssignmentValue,
             "sg070-direct-assignment-expression-value",
             Uncertainty::Exact,
@@ -2254,28 +2249,28 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &sent_def,
-            &sent_return_use,
+            sent_def,
+            sent_return_use,
             DataFlowKind::DefinitionToReturn,
             super::SG071_PRECISION,
             Uncertainty::Exact,
             Some(span(138, 142)),
         );
 
-        let literal_forward = dfg.value_forward_slice(&literal_one);
+        let literal_forward = dfg.value_forward_slice(literal_one);
         assert!(literal_forward.value_ids.contains(&operator));
         assert!(literal_forward.value_ids.contains(&total_def));
 
-        let call_forward = dfg.value_forward_slice(&total_arg);
+        let call_forward = dfg.value_forward_slice(total_arg);
         assert!(call_forward.value_ids.contains(&call_expression));
 
         let return_cfg = cfg_node_at_role(graph, span(131, 142), ControlFlowNodeRole::Return);
-        let return_slice = pdg.return_backward_slice(&return_cfg);
+        let return_slice = pdg.return_backward_slice(return_cfg);
         assert!(return_slice.value_ids.contains(&call_expression));
         assert!(return_slice.value_ids.contains(&sent_def));
 
         let call_site = call_site_at(graph, span(70, 88));
-        let call_slice = pdg.call_backward_slice(&call_site);
+        let call_slice = pdg.call_backward_slice(call_site);
         assert!(call_slice.value_ids.contains(&total_arg));
         assert!(call_slice.value_ids.contains(&field_arg));
         assert!(call_slice.value_ids.contains(&call_expression));
@@ -2296,7 +2291,7 @@ mod tests {
 
         assert_value_node(
             graph,
-            &field_write,
+            field_write,
             ValueKind::Field,
             ValueRole::Unknown,
             Some("value"),
@@ -2304,7 +2299,7 @@ mod tests {
         );
         assert_value_node(
             graph,
-            &index_write,
+            index_write,
             ValueKind::Index,
             ValueRole::Unknown,
             Some("items[index]"),
@@ -2312,8 +2307,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &seed_use,
-            &field_write,
+            seed_use,
+            field_write,
             DataFlowKind::FieldAccess,
             super::SG073_FIELD_WRITE_PRECISION,
             Uncertainty::Probable,
@@ -2321,8 +2316,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &field_write,
-            &field_read,
+            field_write,
+            field_read,
             DataFlowKind::FieldAccess,
             super::SG073_FIELD_READ_PRECISION,
             Uncertainty::Probable,
@@ -2330,8 +2325,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &read_def,
-            &read_use,
+            read_def,
+            read_use,
             DataFlowKind::DefinitionToUse,
             super::SG071_PRECISION,
             Uncertainty::Exact,
@@ -2339,8 +2334,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &read_use,
-            &index_write,
+            read_use,
+            index_write,
             DataFlowKind::IndexAccess,
             super::SG073_INDEX_WRITE_PRECISION,
             Uncertainty::Probable,
@@ -2348,8 +2343,8 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &index_write,
-            &index_read,
+            index_write,
+            index_read,
             DataFlowKind::IndexAccess,
             super::SG073_INDEX_READ_PRECISION,
             Uncertainty::Probable,
@@ -2357,15 +2352,15 @@ mod tests {
         );
         assert_data_flow_edge(
             graph,
-            &field_write,
-            &alias_read,
+            field_write,
+            alias_read,
             DataFlowKind::FieldAccess,
             super::SG073_ALIAS_PRECISION,
             Uncertainty::Possible,
             Some(span(133, 144)),
         );
 
-        let forward = dfg.value_forward_slice(&seed);
+        let forward = dfg.value_forward_slice(seed);
         assert!(forward.value_ids.contains(&field_read));
         assert!(forward.value_ids.contains(&index_read));
         assert!(forward.value_ids.contains(&alias_read));
@@ -2373,26 +2368,26 @@ mod tests {
             forward
                 .diagnostic_ids
                 .iter()
-                .any(|id| diagnostic_kind(graph, id) == Some(DiagnosticKind::AliasUncertainty)),
+                .any(|id| diagnostic_kind(graph, *id) == Some(DiagnosticKind::AliasUncertainty)),
             "forward slice should surface alias uncertainty diagnostics"
         );
 
-        let alias_backward = dfg.value_backward_slice(&alias_read);
+        let alias_backward = dfg.value_backward_slice(alias_read);
         assert!(alias_backward.value_ids.contains(&seed));
         assert!(alias_backward.value_ids.contains(&field_write));
         assert!(
             alias_backward
                 .diagnostic_ids
                 .iter()
-                .any(|id| diagnostic_kind(graph, id) == Some(DiagnosticKind::AliasUncertainty)),
+                .any(|id| diagnostic_kind(graph, *id) == Some(DiagnosticKind::AliasUncertainty)),
             "backward slice should preserve alias uncertainty diagnostics"
         );
     }
 
     fn assert_data_flow_edge(
         graph: &ProgramSupergraph,
-        source_id: &str,
-        target_id: &str,
+        source_id: NodeId,
+        target_id: NodeId,
         flow_kind: DataFlowKind,
         precision: &str,
         uncertainty: Uncertainty,
@@ -2404,7 +2399,7 @@ mod tests {
             .find(|edge| {
                 edge.kind == crate::supergraph::EdgeKind::DataFlow
                     && edge.source_id == source_id
-                    && edge.target_id.as_deref() == Some(target_id)
+                    && edge.target_id == Some(target_id)
                     && matches!(
                         &edge.fact,
                         EdgeFact::DataFlow(data_flow)
@@ -2425,12 +2420,11 @@ mod tests {
         assert!(
             edge.owner
                 .callable_id
-                .as_deref()
                 .is_some_and(is_process_callable_id),
             "DataFlow edge should retain process callable ownership"
         );
         assert!(
-            !edge.fact_id.is_empty() && !edge.payload_hash.is_empty(),
+            edge.fact_id.is_some() && edge.payload_hash.is_some(),
             "DataFlow edge should have refreshed fact identity"
         );
         assert!(
@@ -2440,12 +2434,12 @@ mod tests {
             "DataFlow edge should preserve analysis evidence for {precision}"
         );
         assert_eq!(
-            node_kind(graph, &edge.source_id),
+            node_kind(graph, edge.source_id),
             Some(NodeKind::Value),
             "DataFlow source should be a value"
         );
         assert_eq!(
-            edge.target_id.as_ref().and_then(|id| node_kind(graph, id)),
+            edge.target_id.as_ref().and_then(|id| node_kind(graph, *id)),
             Some(NodeKind::Value),
             "DataFlow target should be a value"
         );
@@ -2453,7 +2447,7 @@ mod tests {
 
     fn assert_value_node(
         graph: &ProgramSupergraph,
-        value_id: &str,
+        value_id: NodeId,
         kind: ValueKind,
         role: ValueRole,
         name: Option<&str>,
@@ -2480,14 +2474,12 @@ mod tests {
         assert!(
             value
                 .callable_id
-                .as_deref()
                 .is_some_and(is_process_callable_id),
             "value payload should retain the process callable ID convention"
         );
         assert!(
             node.owner
                 .callable_id
-                .as_deref()
                 .is_some_and(is_process_callable_id),
             "value node should retain process callable ownership"
         );
@@ -2497,7 +2489,7 @@ mod tests {
             "value node should preserve source span"
         );
         assert!(
-            !node.fact_id.is_empty() && !node.payload_hash.is_empty(),
+            node.fact_id.is_some() && node.payload_hash.is_some(),
             "value node should have refreshed fact identity"
         );
         assert!(
@@ -2510,7 +2502,7 @@ mod tests {
 
     fn assert_value_literal(
         graph: &ProgramSupergraph,
-        value_id: &str,
+        value_id: NodeId,
         expected_literal: ValueLiteral,
     ) {
         let literal = graph.nodes.iter().find_map(|node| match &node.fact {
@@ -2520,7 +2512,7 @@ mod tests {
         assert_eq!(literal, Some(expected_literal));
     }
 
-    fn diagnostic_kind(graph: &ProgramSupergraph, diagnostic_id: &str) -> Option<DiagnosticKind> {
+    fn diagnostic_kind(graph: &ProgramSupergraph, diagnostic_id: NodeId) -> Option<DiagnosticKind> {
         graph.nodes.iter().find_map(|node| match &node.fact {
             NodeFact::Diagnostic(diagnostic) if diagnostic.diagnostic_id == diagnostic_id => {
                 Some(diagnostic.kind)
@@ -2529,13 +2521,13 @@ mod tests {
         })
     }
 
-    fn call_site_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> String {
+    fn call_site_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::CallSite(call_site) if node.span == Some(source_span) => {
-                    Some(call_site.call_site_id.clone())
+                    Some(call_site.call_site_id)
                 }
                 _ => None,
             })
@@ -2546,13 +2538,13 @@ mod tests {
         graph: &ProgramSupergraph,
         source_span: SourceSpan,
         role: ValueRole,
-    ) -> String {
+    ) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Value(value) if node.span == Some(source_span) && value.role == role => {
-                    Some(value.value_id.clone())
+                    Some(value.value_id)
                 }
                 _ => None,
             })
@@ -2563,7 +2555,7 @@ mod tests {
         graph: &ProgramSupergraph,
         source_span: SourceSpan,
         role: ControlFlowNodeRole,
-    ) -> String {
+    ) -> NodeId {
         graph
             .nodes
             .iter()
@@ -2571,62 +2563,63 @@ mod tests {
                 NodeFact::ControlFlow(control)
                     if node.span == Some(source_span) && control.role == role =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing {role:?} CFG node at {source_span:?}"))
     }
 
-    fn condition_node_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> String {
+    fn condition_node_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Condition(condition) if node.span == Some(source_span) => {
-                    Some(condition.condition_id.clone())
+                    Some(condition.condition_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing condition at {source_span:?}"))
     }
 
-    fn is_process_callable_id(callable_id: &str) -> bool {
-        callable_id == "sample.process" || callable_id == "sample:process"
+    fn is_process_callable_id(callable_id: NodeId) -> bool {
+        callable_id == callable_id_from_text("sample.process")
+            || callable_id == callable_id_from_text("sample:process")
     }
 
-    fn sg071_value_edges(graph: &ProgramSupergraph) -> BTreeSet<(String, String)> {
+    fn sg071_value_edges(graph: &ProgramSupergraph) -> BTreeSet<(NodeId, NodeId)> {
         graph
             .edges
             .iter()
             .filter_map(|edge| match &edge.fact {
                 EdgeFact::DataFlow(data_flow) if data_flow.precision == super::SG071_PRECISION => {
-                    Some((edge.source_id.clone(), edge.target_id.clone()?))
+                    Some((edge.source_id, edge.target_id?))
                 }
                 _ => None,
             })
             .collect()
     }
 
-    fn data_flow_edges(graph: &ProgramSupergraph) -> BTreeSet<(String, String)> {
+    fn data_flow_edges(graph: &ProgramSupergraph) -> BTreeSet<(NodeId, NodeId)> {
         graph
             .edges
             .iter()
             .filter_map(|edge| match &edge.fact {
-                EdgeFact::DataFlow(_) => Some((edge.source_id.clone(), edge.target_id.clone()?)),
+                EdgeFact::DataFlow(_) => Some((edge.source_id, edge.target_id?)),
                 _ => None,
             })
             .collect()
     }
 
-    fn assert_reachable_forward(edges: &BTreeSet<(String, String)>, source: &str, target: &str) {
+    fn assert_reachable_forward(edges: &BTreeSet<(NodeId, NodeId)>, source: NodeId, target: NodeId) {
         assert!(
             reachable(edges, source, target, false),
             "expected {source} to reach {target} through forward DataFlow edges"
         );
     }
 
-    fn assert_reachable_backward(edges: &BTreeSet<(String, String)>, source: &str, target: &str) {
+    fn assert_reachable_backward(edges: &BTreeSet<(NodeId, NodeId)>, source: NodeId, target: NodeId) {
         assert!(
             reachable(edges, source, target, true),
             "expected {source} to reach {target} through backward DataFlow edges"
@@ -2634,13 +2627,13 @@ mod tests {
     }
 
     fn reachable(
-        edges: &BTreeSet<(String, String)>,
-        source: &str,
-        target: &str,
+        edges: &BTreeSet<(NodeId, NodeId)>,
+        source: NodeId,
+        target: NodeId,
         reverse: bool,
     ) -> bool {
         let mut seen = BTreeSet::new();
-        let mut frontier = vec![source.to_string()];
+        let mut frontier = vec![source];
         while let Some(current) = frontier.pop() {
             if current == target {
                 return true;
@@ -2667,7 +2660,7 @@ mod tests {
     fn sg072_value_edges(
         graph: &ProgramSupergraph,
         expected_kind: DataFlowKind,
-    ) -> BTreeSet<(String, String)> {
+    ) -> BTreeSet<(NodeId, NodeId)> {
         graph
             .edges
             .iter()
@@ -2676,7 +2669,7 @@ mod tests {
                     if data_flow.precision.starts_with("sg072")
                         && data_flow.flow_kind == expected_kind =>
                 {
-                    Some((edge.source_id.clone(), edge.target_id.clone()?))
+                    Some((edge.source_id, edge.target_id?))
                 }
                 _ => None,
             })
@@ -2684,22 +2677,22 @@ mod tests {
     }
 
     fn merge_value_between_and_use(
-        edges: &BTreeSet<(String, String)>,
-        left_definition: &str,
-        right_definition: &str,
-        use_value: &str,
-    ) -> String {
+        edges: &BTreeSet<(NodeId, NodeId)>,
+        left_definition: NodeId,
+        right_definition: NodeId,
+        use_value: NodeId,
+    ) -> NodeId {
         let left_targets = edges
             .iter()
-            .filter_map(|(source, target)| (source == left_definition).then_some(target.clone()))
+            .filter_map(|(source, target)| (*source == left_definition).then_some(*target))
             .collect::<BTreeSet<_>>();
         let right_targets = edges
             .iter()
-            .filter_map(|(source, target)| (source == right_definition).then_some(target.clone()))
+            .filter_map(|(source, target)| (*source == right_definition).then_some(*target))
             .collect::<BTreeSet<_>>();
         let merge_value = left_targets
             .intersection(&right_targets)
-            .find(|merge_value| edges.contains(&(merge_value.to_string(), use_value.to_string())))
+            .find(|merge_value| edges.contains(&(**merge_value, use_value)))
             .cloned()
             .unwrap_or_else(|| {
                 panic!(
@@ -2710,16 +2703,16 @@ mod tests {
     }
 
     fn loop_carried_value_reached_by(
-        edges: &BTreeSet<(String, String)>,
-        definition: &str,
-    ) -> String {
+        edges: &BTreeSet<(NodeId, NodeId)>,
+        definition: NodeId,
+    ) -> NodeId {
         edges
             .iter()
-            .find_map(|(source, target)| (source == definition).then_some(target.clone()))
+            .find_map(|(source, target)| (*source == definition).then_some(*target))
             .unwrap_or_else(|| panic!("missing loop-carried value reached by {definition}"))
     }
 
-    fn assert_merge_value_node(graph: &ProgramSupergraph, value_id: &str) {
+    fn assert_merge_value_node(graph: &ProgramSupergraph, value_id: NodeId) {
         assert!(
             graph.nodes.iter().any(|node| matches!(
                 &node.fact,
@@ -2734,83 +2727,83 @@ mod tests {
 
     fn assert_reaches(
         graph: &ProgramSupergraph,
-        edges: &BTreeSet<(String, String)>,
+        edges: &BTreeSet<(NodeId, NodeId)>,
         definition_span: SourceSpan,
-        use_value_id: &str,
+        use_value_id: NodeId,
     ) {
         let definition_value_id = definition_value_at(graph, definition_span);
         assert!(
-            edges.contains(&(definition_value_id.clone(), use_value_id.to_string())),
+            edges.contains(&(definition_value_id, use_value_id)),
             "expected definition at {definition_span:?} to reach use value {use_value_id}"
         );
     }
 
     fn assert_not_reaches(
         graph: &ProgramSupergraph,
-        edges: &BTreeSet<(String, String)>,
+        edges: &BTreeSet<(NodeId, NodeId)>,
         definition_span: SourceSpan,
-        use_value_id: &str,
+        use_value_id: NodeId,
     ) {
         let definition_value_id = definition_value_at(graph, definition_span);
         assert!(
-            !edges.contains(&(definition_value_id.clone(), use_value_id.to_string())),
+            !edges.contains(&(definition_value_id, use_value_id)),
             "did not expect definition at {definition_span:?} to reach use value {use_value_id}"
         );
     }
 
-    fn definition_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> String {
+    fn definition_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Definition(definition) if node.span == Some(source_span) => {
-                    definition.value_id.clone()
+                    definition.value_id
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing definition value at {source_span:?}"))
     }
 
-    fn use_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> String {
+    fn use_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Use(use_fact) if node.span == Some(source_span) => {
-                    use_fact.value_id.clone()
+                    use_fact.value_id
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing use value at {source_span:?}"))
     }
 
-    fn expression_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> String {
+    fn expression_value_at(graph: &ProgramSupergraph, source_span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Expression(expression) if node.span == Some(source_span) => {
-                    expression.value_id.clone()
+                    expression.value_id
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing expression value at {source_span:?}"))
     }
 
-    fn alias_expression_id(graph: &ProgramSupergraph) -> String {
+    fn alias_expression_id(graph: &ProgramSupergraph) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Expression(expression) if node.span == Some(span(133, 144)) => {
-                    Some(expression.expression_id.clone())
+                    Some(expression.expression_id)
                 }
                 _ => None,
             })
             .expect("missing alias field expression")
     }
 
-    fn node_kind(graph: &ProgramSupergraph, node_id: &str) -> Option<NodeKind> {
+    fn node_kind(graph: &ProgramSupergraph, node_id: NodeId) -> Option<NodeKind> {
         graph
             .nodes
             .iter()

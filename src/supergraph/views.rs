@@ -146,44 +146,44 @@ impl<'a> CallGraphView<'a> {
         let edge_ids = indexed_call_edge_ids(self.graph, filter);
         edge_ids
             .into_iter()
-            .filter_map(move |edge_id| indexed_edge(self.graph, &edge_id))
+            .filter_map(move |edge_id| indexed_edge(self.graph, edge_id))
             .filter(move |edge| filter.matches_edge(edge))
     }
 
-    pub fn calls_from_call_site(&'a self, call_site_id: &'a str) -> Vec<&'a GraphEdge> {
+    pub fn calls_from_call_site(&'a self, call_site_id: NodeId) -> Vec<&'a GraphEdge> {
         self.graph
             .indexes
             .call_site_to_calls
-            .get(call_site_id)
+            .get(&call_site_id)
             .into_iter()
             .flatten()
-            .filter_map(|edge_id| indexed_edge(self.graph, edge_id))
+            .filter_map(|edge_id| indexed_edge(self.graph, *edge_id))
             .collect()
     }
 
     pub fn calls_from_caller_to_callee(
         &'a self,
-        caller_id: &'a str,
-        callee_id: &'a str,
+        caller_id: NodeId,
+        callee_id: NodeId,
     ) -> Vec<&'a GraphEdge> {
         self.calls_from_caller_to_target(caller_id, callee_id)
     }
 
     pub fn calls_from_caller_to_target(
         &'a self,
-        caller_id: &'a str,
-        target_id: &'a str,
+        caller_id: NodeId,
+        target_id: NodeId,
     ) -> Vec<&'a GraphEdge> {
         if let Some(edge_ids) = self
             .graph
             .indexes
             .caller_to_concrete_target_calls
-            .get(caller_id)
-            .and_then(|targets| targets.get(target_id))
+            .get(&caller_id)
+            .and_then(|targets| targets.get(&target_id))
         {
             return edge_ids
                 .iter()
-                .filter_map(|edge_id| indexed_edge(self.graph, edge_id))
+                .filter_map(|edge_id| indexed_edge(self.graph, *edge_id))
                 .collect();
         }
 
@@ -192,19 +192,19 @@ impl<'a> CallGraphView<'a> {
             .with_callee(target_id);
         indexed_call_edge_ids(self.graph, &filter)
             .into_iter()
-            .filter_map(|edge_id| indexed_edge(self.graph, &edge_id))
+            .filter_map(|edge_id| indexed_edge(self.graph, edge_id))
             .filter(|edge| filter.matches_edge(edge))
             .collect()
     }
 
-    pub fn call_targets_from_caller(&'a self, caller_id: &'a str) -> Vec<&'a str> {
+    pub fn call_targets_from_caller(&'a self, caller_id: NodeId) -> Vec<NodeId> {
         self.graph
             .indexes
             .caller_to_concrete_call_targets
-            .get(caller_id)
+            .get(&caller_id)
             .into_iter()
             .flatten()
-            .map(String::as_str)
+            .copied()
             .collect()
     }
 
@@ -236,11 +236,11 @@ impl<'a> StructuralGraphView<'a> {
         Self { graph }
     }
 
-    pub fn node(&'a self, node_id: &'a str) -> Option<&'a GraphNode> {
+    pub fn node(&'a self, node_id: NodeId) -> Option<&'a GraphNode> {
         indexed_node(self.graph, node_id)
     }
 
-    pub fn edge(&'a self, edge_id: &'a str) -> Option<&'a GraphEdge> {
+    pub fn edge(&'a self, edge_id: sg::EdgeId) -> Option<&'a GraphEdge> {
         indexed_edge(self.graph, edge_id)
     }
 
@@ -274,27 +274,27 @@ impl<'a> StructuralGraphView<'a> {
 
     pub fn contains_children(
         &'a self,
-        container_id: &'a str,
+        container_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         indexed_outgoing_edges_by_kind(self.graph, container_id, EdgeKind::Contains)
             .into_iter()
-            .filter_map(move |edge| edge.target_id.as_deref())
+            .filter_map(move |edge| edge.target_id)
             .filter_map(move |node_id| indexed_node(self.graph, node_id))
     }
 
-    pub fn contains_parent(&'a self, member_id: &'a str) -> Option<&'a GraphNode> {
+    pub fn contains_parent(&'a self, member_id: NodeId) -> Option<&'a GraphNode> {
         indexed_incoming_edges_by_kind(self.graph, member_id, EdgeKind::Contains)
             .into_iter()
-            .find_map(|edge| indexed_node(self.graph, &edge.source_id))
+            .find_map(|edge| indexed_node(self.graph, edge.source_id))
     }
 
     pub fn nodes_at_source_span(
         &'a self,
-        artifact_id: Option<&'a str>,
+        artifact_id: Option<NodeId>,
         span: SourceSpan,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         let key = SourceSpanIndexKey {
-            artifact_id: artifact_id.map(str::to_string),
+            artifact_id: artifact_id,
             span,
         };
         self.graph
@@ -303,78 +303,78 @@ impl<'a> StructuralGraphView<'a> {
             .get(&key)
             .into_iter()
             .flatten()
-            .filter_map(move |node_id| indexed_node(self.graph, node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, *node_id))
     }
 
     pub fn nodes_owned_by_artifact(
         &'a self,
-        artifact_id: &'a str,
+        artifact_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.graph
             .indexes
             .artifact_to_nodes
-            .get(artifact_id)
+            .get(&artifact_id)
             .into_iter()
             .flatten()
-            .filter_map(move |node_id| indexed_node(self.graph, node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, *node_id))
     }
 
     pub fn nodes_owned_by_callable(
         &'a self,
-        callable_id: &'a str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.graph
             .indexes
             .callable_to_nodes
-            .get(callable_id)
+            .get(&callable_id)
             .into_iter()
             .flatten()
-            .filter_map(move |node_id| indexed_node(self.graph, node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, *node_id))
     }
 
-    pub fn edges_owned_by(&'a self, owner_id: &'a str) -> impl Iterator<Item = &'a GraphEdge> + 'a {
+    pub fn edges_owned_by(&'a self, owner_id: NodeId) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         self.graph
             .indexes
             .owner_to_edges
-            .get(owner_id)
+            .get(&owner_id)
             .into_iter()
             .flatten()
-            .filter_map(move |edge_id| indexed_edge(self.graph, edge_id))
+            .filter_map(move |edge_id| indexed_edge(self.graph, *edge_id))
     }
 
     pub fn definitions_for_symbol(
         &'a self,
-        symbol_id: &'a str,
+        symbol_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.graph
             .indexes
             .symbol_to_definitions
-            .get(symbol_id)
+            .get(&symbol_id)
             .into_iter()
             .flatten()
-            .filter_map(move |node_id| indexed_node(self.graph, node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, *node_id))
     }
 
     pub fn uses_for_symbol(
         &'a self,
-        symbol_id: &'a str,
+        symbol_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.graph
             .indexes
             .symbol_to_uses
-            .get(symbol_id)
+            .get(&symbol_id)
             .into_iter()
             .flatten()
-            .filter_map(move |node_id| indexed_node(self.graph, node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, *node_id))
     }
 }
 
 impl ProgramSupergraph {
-    pub fn node(&self, node_id: &str) -> Option<&GraphNode> {
+    pub fn node(&self, node_id: NodeId) -> Option<&GraphNode> {
         indexed_node(self, node_id)
     }
 
-    pub fn edge(&self, edge_id: &str) -> Option<&GraphEdge> {
+    pub fn edge(&self, edge_id: sg::EdgeId) -> Option<&GraphEdge> {
         indexed_edge(self, edge_id)
     }
 
@@ -424,7 +424,7 @@ impl<'a> ControlFlowGraphView<'a> {
 
     pub fn nodes_for_callable(
         &'a self,
-        callable_id: &'a str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         indexed_nodes_by_kind(self.graph, NodeKind::ControlFlow)
             .into_iter()
@@ -435,7 +435,7 @@ impl<'a> ControlFlowGraphView<'a> {
 
     pub fn edges_for_callable(
         &'a self,
-        callable_id: &'a str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_edges_by_kinds(self.graph, &[EdgeKind::ControlFlow])
             .into_iter()
@@ -444,18 +444,18 @@ impl<'a> ControlFlowGraphView<'a> {
             })
     }
 
-    pub fn successors(&'a self, cfg_node_id: &'a str) -> impl Iterator<Item = &'a GraphEdge> + 'a {
+    pub fn successors(&'a self, cfg_node_id: NodeId) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_outgoing_edges_by_kind(self.graph, cfg_node_id, EdgeKind::ControlFlow).into_iter()
     }
 
     pub fn predecessors(
         &'a self,
-        cfg_node_id: &'a str,
+        cfg_node_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_incoming_edges_by_kind(self.graph, cfg_node_id, EdgeKind::ControlFlow).into_iter()
     }
 
-    pub fn entry_nodes(&'a self, callable_id: &'a str) -> impl Iterator<Item = &'a GraphNode> + 'a {
+    pub fn entry_nodes(&'a self, callable_id: NodeId) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.nodes_for_callable(callable_id).filter(|node| {
             matches!(
                 &node.fact,
@@ -464,7 +464,7 @@ impl<'a> ControlFlowGraphView<'a> {
         })
     }
 
-    pub fn exit_nodes(&'a self, callable_id: &'a str) -> impl Iterator<Item = &'a GraphNode> + 'a {
+    pub fn exit_nodes(&'a self, callable_id: NodeId) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.nodes_for_callable(callable_id).filter(|node| {
             matches!(
                 &node.fact,
@@ -486,29 +486,29 @@ impl<'a> DataFlowGraphView<'a> {
 
     pub fn values_for_callable(
         &'a self,
-        callable_id: &'a str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         indexed_nodes_by_kind(self.graph, NodeKind::Value)
             .into_iter()
             .filter(move |node| {
-                matches!(&node.fact, NodeFact::Value(value) if value.callable_id.as_deref() == Some(callable_id))
+                matches!(&node.fact, NodeFact::Value(value) if value.callable_id == Some(callable_id))
             })
     }
 
     pub fn values_for_call_site(
         &'a self,
-        call_site_id: &'a str,
+        call_site_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         indexed_nodes_by_kind(self.graph, NodeKind::Value)
             .into_iter()
             .filter(move |node| {
-                matches!(&node.fact, NodeFact::Value(value) if value.call_site_id.as_deref() == Some(call_site_id))
+                matches!(&node.fact, NodeFact::Value(value) if value.call_site_id == Some(call_site_id))
             })
     }
 
     pub fn edges_for_callable(
         &'a self,
-        callable_id: &'a str,
+        callable_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_edges_by_kinds(self.graph, dfg_edge_kinds())
             .into_iter()
@@ -517,7 +517,7 @@ impl<'a> DataFlowGraphView<'a> {
 
     pub fn outgoing_value_edges(
         &'a self,
-        value_id: &'a str,
+        value_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         dfg_value_edge_kinds()
             .iter()
@@ -527,40 +527,40 @@ impl<'a> DataFlowGraphView<'a> {
 
     pub fn incoming_value_edges(
         &'a self,
-        value_id: &'a str,
+        value_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         dfg_value_edge_kinds()
             .iter()
             .flat_map(move |kind| indexed_incoming_edges_by_kind(self.graph, value_id, *kind))
     }
 
-    pub fn value_forward_slice(&self, seed_value_id: &str) -> ValueForwardSlice {
+    pub fn value_forward_slice(&self, seed_value_id: NodeId) -> ValueForwardSlice {
         ProgramDependenceGraphView::new(self.graph).value_forward_slice(seed_value_id)
     }
 
-    pub fn value_backward_slice(&self, seed_value_id: &str) -> ValueForwardSlice {
+    pub fn value_backward_slice(&self, seed_value_id: NodeId) -> ValueForwardSlice {
         let mut value_ids = BTreeSet::new();
         let mut edge_ids = BTreeSet::new();
-        let mut frontier = vec![seed_value_id.to_string()];
+        let mut frontier = vec![seed_value_id];
 
         while let Some(value_id) = frontier.pop() {
-            if !value_ids.insert(value_id.clone()) {
+            if !value_ids.insert(value_id) {
                 continue;
             }
 
-            for edge in self.incoming_value_edges(&value_id) {
-                edge_ids.insert(edge.edge_id.clone());
-                if is_value_node(self.graph, &edge.source_id)
+            for edge in self.incoming_value_edges(value_id) {
+                edge_ids.insert(edge.edge_id);
+                if is_value_node(self.graph, edge.source_id)
                     && !value_ids.contains(&edge.source_id)
                 {
-                    frontier.push(edge.source_id.clone());
+                    frontier.push(edge.source_id);
                 }
             }
         }
 
         let diagnostic_ids = diagnostic_ids_for_slice(self.graph, &value_ids, &edge_ids);
         ValueForwardSlice {
-            seed_value_id: seed_value_id.to_string(),
+            seed_value_id: seed_value_id,
             value_ids: value_ids.into_iter().collect(),
             edge_ids: edge_ids.into_iter().collect(),
             diagnostic_ids,
@@ -580,38 +580,38 @@ impl<'a> TraceabilityGraphView<'a> {
 
     pub fn requirement_to_code_edges(
         &'a self,
-        requirement_id: &'a str,
+        requirement_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_outgoing_edges_by_kind(self.graph, requirement_id, EdgeKind::TracesTo).into_iter()
     }
 
     pub fn code_to_requirement_edges(
         &'a self,
-        code_fact_id: &'a str,
+        code_fact_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_incoming_edges_by_kind(self.graph, code_fact_id, EdgeKind::TracesTo).into_iter()
     }
 
     pub fn code_facts_for_requirement(
         &'a self,
-        requirement_id: &'a str,
+        requirement_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.requirement_to_code_edges(requirement_id)
-            .filter_map(move |edge| edge.target_id.as_deref())
+            .filter_map(move |edge| edge.target_id)
             .filter_map(move |node_id| indexed_node(self.graph, node_id))
     }
 
     pub fn requirements_for_code(
         &'a self,
-        code_fact_id: &'a str,
+        code_fact_id: NodeId,
     ) -> impl Iterator<Item = &'a Requirement> + 'a {
         self.graph
             .indexes
             .code_to_requirements
-            .get(code_fact_id)
+            .get(&code_fact_id)
             .into_iter()
             .flatten()
-            .filter_map(move |requirement_id| indexed_node(self.graph, requirement_id))
+            .filter_map(move |requirement_id| indexed_node(self.graph, *requirement_id))
             .filter_map(|node| match &node.fact {
                 NodeFact::Requirement(requirement) => Some(requirement),
                 _ => None,
@@ -620,7 +620,7 @@ impl<'a> TraceabilityGraphView<'a> {
 
     pub fn requirement_to_domain_knowledge_edges(
         &'a self,
-        requirement_id: &'a str,
+        requirement_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_outgoing_edges_by_kind(
             self.graph,
@@ -632,7 +632,7 @@ impl<'a> TraceabilityGraphView<'a> {
 
     pub fn domain_knowledge_to_requirement_edges(
         &'a self,
-        domain_knowledge_id: &'a str,
+        domain_knowledge_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphEdge> + 'a {
         indexed_incoming_edges_by_kind(
             self.graph,
@@ -644,25 +644,25 @@ impl<'a> TraceabilityGraphView<'a> {
 
     pub fn domain_knowledge_for_requirement(
         &'a self,
-        requirement_id: &'a str,
+        requirement_id: NodeId,
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         self.requirement_to_domain_knowledge_edges(requirement_id)
-            .filter_map(move |edge| edge.target_id.as_deref())
+            .filter_map(move |edge| edge.target_id)
             .filter_map(move |node_id| indexed_node(self.graph, node_id))
             .filter(|node| matches!(&node.fact, NodeFact::DomainKnowledge(_)))
     }
 
     pub fn requirements_for_domain_knowledge(
         &'a self,
-        domain_knowledge_id: &'a str,
+        domain_knowledge_id: NodeId,
     ) -> impl Iterator<Item = &'a Requirement> + 'a {
         self.graph
             .indexes
             .domain_knowledge_to_requirements
-            .get(domain_knowledge_id)
+            .get(&domain_knowledge_id)
             .into_iter()
             .flatten()
-            .filter_map(move |requirement_id| indexed_node(self.graph, requirement_id))
+            .filter_map(move |requirement_id| indexed_node(self.graph, *requirement_id))
             .filter_map(|node| match &node.fact {
                 NodeFact::Requirement(requirement) => Some(requirement),
                 _ => None,
@@ -682,12 +682,15 @@ impl<'a> InvalidationGraphView<'a> {
 
     pub fn invalidated_by(
         &'a self,
-        invalidator_id: &str,
+        invalidator_id: impl Into<invalidation::InvalidationSubject>,
     ) -> Vec<invalidation::InvalidationDependency> {
         invalidation::invalidated_by(self.graph, invalidator_id)
     }
 
-    pub fn invalidation_closure(&'a self, invalidator_id: &'a str) -> BTreeSet<NodeId> {
+    pub fn invalidation_closure(
+        &'a self,
+        invalidator_id: impl Into<invalidation::InvalidationSubject>,
+    ) -> BTreeSet<invalidation::InvalidationSubject> {
         invalidation::invalidation_closure(self.graph, invalidator_id)
     }
 }
@@ -778,58 +781,58 @@ impl<'a> ProgramDependenceGraphView<'a> {
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         let node_ids = self
             .edges(filter)
-            .flat_map(|edge| std::iter::once(edge.source_id.clone()).chain(edge.target_id.clone()))
+            .flat_map(|edge| std::iter::once(edge.source_id).chain(edge.target_id))
             .collect::<BTreeSet<_>>();
         node_ids
             .into_iter()
-            .filter_map(move |node_id| indexed_node(self.graph, &node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, node_id))
     }
 
-    pub fn value_forward_slice(&self, seed_value_id: &str) -> ValueForwardSlice {
+    pub fn value_forward_slice(&self, seed_value_id: NodeId) -> ValueForwardSlice {
         let mut value_ids = BTreeSet::new();
         let mut edge_ids = BTreeSet::new();
-        let mut frontier = vec![seed_value_id.to_string()];
+        let mut frontier = vec![seed_value_id];
 
         while let Some(value_id) = frontier.pop() {
-            if !value_ids.insert(value_id.clone()) {
+            if !value_ids.insert(value_id) {
                 continue;
             }
 
-            for edge in self.outgoing_value_flow_edges(&value_id) {
-                let Some(target_id) = edge.target_id.as_deref() else {
+            for edge in self.outgoing_value_flow_edges(value_id) {
+                let Some(target_id) = edge.target_id else {
                     continue;
                 };
                 if !is_value_node(self.graph, target_id) {
                     continue;
                 }
-                edge_ids.insert(edge.edge_id.clone());
-                if !value_ids.contains(target_id) {
-                    frontier.push(target_id.to_string());
+                edge_ids.insert(edge.edge_id);
+                if !value_ids.contains(&target_id) {
+                    frontier.push(target_id);
                 }
             }
         }
 
         let diagnostic_ids = diagnostic_ids_for_slice(self.graph, &value_ids, &edge_ids);
         ValueForwardSlice {
-            seed_value_id: seed_value_id.to_string(),
+            seed_value_id: seed_value_id,
             value_ids: value_ids.into_iter().collect(),
             edge_ids: edge_ids.into_iter().collect(),
             diagnostic_ids,
         }
     }
 
-    pub fn behavior_backward_slice(&self, behavior_id: &str) -> BehaviorBackwardSlice {
+    pub fn behavior_backward_slice(&self, behavior_id: NodeId) -> BehaviorBackwardSlice {
         let mut value_ids = seed_values_for_behavior(self.graph, behavior_id);
         let mut edge_ids = BTreeSet::new();
-        let mut frontier = value_ids.iter().cloned().collect::<Vec<_>>();
+        let mut frontier = value_ids.iter().copied().collect::<Vec<_>>();
 
         while let Some(value_id) = frontier.pop() {
-            for edge in self.incoming_value_flow_edges(&value_id) {
-                edge_ids.insert(edge.edge_id.clone());
-                if is_value_node(self.graph, &edge.source_id)
-                    && value_ids.insert(edge.source_id.clone())
+            for edge in self.incoming_value_flow_edges(value_id) {
+                edge_ids.insert(edge.edge_id);
+                if is_value_node(self.graph, edge.source_id)
+                    && value_ids.insert(edge.source_id)
                 {
-                    frontier.push(edge.source_id.clone());
+                    frontier.push(edge.source_id);
                 }
             }
         }
@@ -838,15 +841,15 @@ impl<'a> ProgramDependenceGraphView<'a> {
         let control_condition_ids = controls
             .iter()
             .map(|edge| {
-                edge_ids.insert(edge.edge_id.clone());
-                edge.source_id.clone()
+                edge_ids.insert(edge.edge_id);
+                edge.source_id
             })
             .collect::<BTreeSet<_>>();
         let path_conditions = path_conditions_for_behavior(self.graph, behavior_id, &controls);
         let diagnostic_ids = diagnostic_ids_for_slice(self.graph, &value_ids, &edge_ids);
 
         BehaviorBackwardSlice {
-            behavior_id: behavior_id.to_string(),
+            behavior_id: behavior_id,
             value_ids: value_ids.into_iter().collect(),
             control_condition_ids: control_condition_ids.into_iter().collect(),
             path_conditions,
@@ -855,23 +858,23 @@ impl<'a> ProgramDependenceGraphView<'a> {
         }
     }
 
-    pub fn return_backward_slice(&self, return_id: &str) -> BehaviorBackwardSlice {
+    pub fn return_backward_slice(&self, return_id: NodeId) -> BehaviorBackwardSlice {
         self.behavior_backward_slice(return_id)
     }
 
-    pub fn write_backward_slice(&self, write_id: &str) -> BehaviorBackwardSlice {
+    pub fn write_backward_slice(&self, write_id: NodeId) -> BehaviorBackwardSlice {
         self.behavior_backward_slice(write_id)
     }
 
-    pub fn call_backward_slice(&self, call_site_id: &str) -> BehaviorBackwardSlice {
+    pub fn call_backward_slice(&self, call_site_id: NodeId) -> BehaviorBackwardSlice {
         self.behavior_backward_slice(call_site_id)
     }
 
-    pub fn branch_backward_slice(&self, condition_id: &str) -> BehaviorBackwardSlice {
+    pub fn branch_backward_slice(&self, condition_id: NodeId) -> BehaviorBackwardSlice {
         self.behavior_backward_slice(condition_id)
     }
 
-    fn outgoing_value_flow_edges(&self, value_id: &str) -> Vec<&'a GraphEdge> {
+    fn outgoing_value_flow_edges(&self, value_id: NodeId) -> Vec<&'a GraphEdge> {
         [EdgeKind::DataFlow, EdgeKind::ReturnsTo, EdgeKind::ThrowsTo]
             .into_iter()
             .flat_map(|kind| indexed_outgoing_edges_by_kind(self.graph, value_id, kind))
@@ -884,7 +887,7 @@ impl<'a> ProgramDependenceGraphView<'a> {
             .collect()
     }
 
-    fn incoming_value_flow_edges(&self, value_id: &str) -> Vec<&'a GraphEdge> {
+    fn incoming_value_flow_edges(&self, value_id: NodeId) -> Vec<&'a GraphEdge> {
         [EdgeKind::DataFlow, EdgeKind::ReturnsTo, EdgeKind::ThrowsTo]
             .into_iter()
             .flat_map(|kind| indexed_incoming_edges_by_kind(self.graph, value_id, kind))
@@ -928,35 +931,30 @@ impl SystemDependenceGraphFilter {
         }
         let endpoints = match &edge.fact {
             EdgeFact::Controls(controls) => {
-                Some((controls.callable_id.as_str(), controls.callable_id.as_str()))
+                Some((controls.callable_id, Some(controls.callable_id)))
             }
-            EdgeFact::DataFlow(data_flow) => Some((
-                data_flow.callable_id.as_str(),
-                data_flow.callable_id.as_str(),
-            )),
+            EdgeFact::DataFlow(data_flow) => {
+                Some((data_flow.callable_id, Some(data_flow.callable_id)))
+            }
             EdgeFact::Calls(calls) => Some((
-                calls.caller_callable_id.as_str(),
-                calls
-                    .callee_callable_id
-                    .as_deref()
-                    .or(calls.external_target_id.as_deref())
-                    .unwrap_or(""),
+                calls.caller_callable_id,
+                calls.callee_callable_id.or(calls.external_target_id),
             )),
             EdgeFact::ParameterIn(parameter) => Some((
-                parameter.caller_callable_id.as_str(),
-                parameter.callee_callable_id.as_str(),
+                parameter.caller_callable_id,
+                Some(parameter.callee_callable_id),
             )),
             EdgeFact::ReturnsTo(returns) => Some((
-                returns.callee_callable_id.as_str(),
-                returns.caller_callable_id.as_str(),
+                returns.callee_callable_id,
+                Some(returns.caller_callable_id),
             )),
             EdgeFact::ParameterOut(parameter) => Some((
-                parameter.callee_callable_id.as_str(),
-                parameter.caller_callable_id.as_str(),
+                parameter.callee_callable_id,
+                Some(parameter.caller_callable_id),
             )),
             EdgeFact::ThrowsTo(throws) => Some((
-                throws.callee_callable_id.as_str(),
-                throws.caller_callable_id.as_str(),
+                throws.callee_callable_id,
+                Some(throws.caller_callable_id),
             )),
             _ => None,
         };
@@ -964,8 +962,8 @@ impl SystemDependenceGraphFilter {
             return false;
         };
         self.callable_ids.is_empty()
-            || self.callable_ids.contains(left)
-            || self.callable_ids.contains(right)
+            || self.callable_ids.contains(&left)
+            || right.is_some_and(|right| self.callable_ids.contains(&right))
     }
 }
 
@@ -1049,14 +1047,14 @@ impl<'a> SystemDependenceGraphView<'a> {
     ) -> impl Iterator<Item = &'a GraphNode> + 'a {
         let node_ids = self
             .edges(filter)
-            .flat_map(|edge| std::iter::once(edge.source_id.clone()).chain(edge.target_id.clone()))
+            .flat_map(|edge| std::iter::once(edge.source_id).chain(edge.target_id))
             .collect::<BTreeSet<_>>();
         node_ids
             .into_iter()
-            .filter_map(move |node_id| indexed_node(self.graph, &node_id))
+            .filter_map(move |node_id| indexed_node(self.graph, node_id))
     }
 
-    pub fn value_forward_slice(&self, seed_value_id: &str) -> SystemDependenceSlice {
+    pub fn value_forward_slice(&self, seed_value_id: NodeId) -> SystemDependenceSlice {
         system_slice(
             self.graph,
             seed_value_id,
@@ -1065,7 +1063,7 @@ impl<'a> SystemDependenceGraphView<'a> {
         )
     }
 
-    pub fn value_backward_slice(&self, seed_value_id: &str) -> SystemDependenceSlice {
+    pub fn value_backward_slice(&self, seed_value_id: NodeId) -> SystemDependenceSlice {
         system_slice(
             self.graph,
             seed_value_id,
@@ -1074,11 +1072,11 @@ impl<'a> SystemDependenceGraphView<'a> {
         )
     }
 
-    pub fn cross_call_slice(&self, seed_id: &str) -> SystemDependenceSlice {
+    pub fn cross_call_slice(&self, seed_id: NodeId) -> SystemDependenceSlice {
         system_slice(self.graph, seed_id, SdgTraversalDirection::Both, false)
     }
 
-    pub fn requirement_slice(&self, requirement_id: &str) -> SystemDependenceSlice {
+    pub fn requirement_slice(&self, requirement_id: NodeId) -> SystemDependenceSlice {
         system_slice(
             self.graph,
             requirement_id,
@@ -1091,9 +1089,9 @@ impl<'a> SystemDependenceGraphView<'a> {
         let mut called_local_targets = BTreeSet::new();
         for edge in indexed_edges_by_kinds(self.graph, &[EdgeKind::Calls]) {
             if let EdgeFact::Calls(calls) = &edge.fact
-                && let Some(callee_id) = calls.callee_callable_id.as_deref()
+                && let Some(callee_id) = calls.callee_callable_id
             {
-                called_local_targets.insert(callee_id.to_string());
+                called_local_targets.insert(callee_id);
             }
         }
 
@@ -1105,7 +1103,7 @@ impl<'a> SystemDependenceGraphView<'a> {
                         || !callable.external_invocation_metadata.is_empty()
                         || !called_local_targets.contains(&callable.callable_id) =>
                 {
-                    Some(callable.callable_id.clone())
+                    Some(callable.callable_id)
                 }
                 _ => None,
             })
@@ -1122,12 +1120,11 @@ impl<'a> SystemDependenceGraphView<'a> {
                     Some(SdgSink {
                         sink_id: edge
                             .target_id
-                            .clone()
-                            .or_else(|| calls.external_target_id.clone())
-                            .unwrap_or_else(|| calls.call_site_id.clone()),
-                        call_site_id: calls.call_site_id.clone(),
-                        caller_callable_id: calls.caller_callable_id.clone(),
-                        edge_id: edge.edge_id.clone(),
+                            .or(calls.external_target_id)
+                            .unwrap_or_else(|| calls.call_site_id),
+                        call_site_id: calls.call_site_id,
+                        caller_callable_id: calls.caller_callable_id,
+                        edge_id: edge.edge_id,
                     })
                 }
                 _ => None,
@@ -1137,51 +1134,50 @@ impl<'a> SystemDependenceGraphView<'a> {
 
     pub fn entrypoint_to_sink_slice(
         &self,
-        entrypoint_id: &str,
-        sink_id: &str,
+        entrypoint_id: NodeId,
+        sink_id: NodeId,
     ) -> Option<EntrypointSinkPath> {
         let mut visited = BTreeSet::new();
         let mut frontier = vec![(
-            entrypoint_id.to_string(),
-            vec![entrypoint_id.to_string()],
+            entrypoint_id,
+            vec![entrypoint_id],
             Vec::<NodeId>::new(),
             Vec::<sg::EdgeId>::new(),
         )];
 
         while let Some((callable_id, callable_path, call_site_path, edge_path)) = frontier.pop() {
-            if !visited.insert(callable_id.clone()) {
+            if !visited.insert(callable_id) {
                 continue;
             }
 
-            for edge in self.calls_from_callable(&callable_id) {
+            for edge in self.calls_from_callable(callable_id) {
                 let EdgeFact::Calls(calls) = &edge.fact else {
                     continue;
                 };
                 let mut next_call_sites = call_site_path.clone();
-                next_call_sites.push(calls.call_site_id.clone());
+                next_call_sites.push(calls.call_site_id);
                 let mut next_edges = edge_path.clone();
-                next_edges.push(edge.edge_id.clone());
+                next_edges.push(edge.edge_id);
                 let target_id = edge
                     .target_id
-                    .as_deref()
-                    .or(calls.external_target_id.as_deref());
+                    .or(calls.external_target_id);
                 if target_id == Some(sink_id) || calls.call_site_id == sink_id {
                     return Some(EntrypointSinkPath {
-                        entrypoint_id: entrypoint_id.to_string(),
-                        sink_id: sink_id.to_string(),
+                        entrypoint_id: entrypoint_id,
+                        sink_id: sink_id,
                         callable_ids: callable_path,
                         call_site_ids: next_call_sites,
                         edge_ids: next_edges,
                     });
                 }
-                if let Some(callee_id) = calls.callee_callable_id.as_deref()
+                if let Some(callee_id) = calls.callee_callable_id
                     && indexed_node(self.graph, callee_id)
                         .is_some_and(|node| matches!(&node.fact, NodeFact::Callable(_)))
                 {
                     let mut next_callables = callable_path.clone();
-                    next_callables.push(callee_id.to_string());
+                    next_callables.push(callee_id);
                     frontier.push((
-                        callee_id.to_string(),
+                        callee_id,
                         next_callables,
                         next_call_sites,
                         next_edges,
@@ -1193,25 +1189,25 @@ impl<'a> SystemDependenceGraphView<'a> {
         None
     }
 
-    pub fn callers_affected_by_callee(&self, callee_id: &str) -> CalleeImpactSlice {
+    pub fn callers_affected_by_callee(&self, callee_id: NodeId) -> CalleeImpactSlice {
         let mut affected_caller_ids = BTreeSet::new();
         let mut affected_call_site_ids = BTreeSet::new();
         let mut edge_ids = BTreeSet::new();
-        let mut frontier = vec![callee_id.to_string()];
+        let mut frontier = vec![callee_id];
         let mut visited_callees = BTreeSet::new();
 
         while let Some(current_callee_id) = frontier.pop() {
-            if !visited_callees.insert(current_callee_id.clone()) {
+            if !visited_callees.insert(current_callee_id) {
                 continue;
             }
 
-            for edge in self.incoming_call_and_summary_edges(&current_callee_id) {
+            for edge in self.incoming_call_and_summary_edges(current_callee_id) {
                 let Some((caller_id, call_site_id)) = caller_and_call_site_for_impact(edge) else {
                     continue;
                 };
-                edge_ids.insert(edge.edge_id.clone());
+                edge_ids.insert(edge.edge_id);
                 affected_call_site_ids.insert(call_site_id);
-                if affected_caller_ids.insert(caller_id.clone()) {
+                if affected_caller_ids.insert(caller_id) {
                     frontier.push(caller_id);
                 }
             }
@@ -1221,7 +1217,7 @@ impl<'a> SystemDependenceGraphView<'a> {
         let value_ids = BTreeSet::new();
         let diagnostic_ids = diagnostic_ids_for_slice(self.graph, &value_ids, &edge_ids);
         CalleeImpactSlice {
-            callee_id: callee_id.to_string(),
+            callee_id: callee_id,
             affected_caller_ids: affected_caller_ids.into_iter().collect(),
             affected_call_site_ids: affected_call_site_ids.into_iter().collect(),
             edge_ids: edge_ids.into_iter().collect(),
@@ -1230,23 +1226,23 @@ impl<'a> SystemDependenceGraphView<'a> {
         }
     }
 
-    fn calls_from_callable(&self, callable_id: &str) -> Vec<&'a GraphEdge> {
+    fn calls_from_callable(&self, callable_id: NodeId) -> Vec<&'a GraphEdge> {
         self.graph
             .indexes
             .calls_by_caller
-            .get(callable_id)
+            .get(&callable_id)
             .into_iter()
             .flatten()
-            .filter_map(|edge_id| indexed_edge(self.graph, edge_id))
+            .filter_map(|edge_id| indexed_edge(self.graph, *edge_id))
             .collect()
     }
 
-    fn incoming_call_and_summary_edges(&self, callee_id: &str) -> Vec<&'a GraphEdge> {
+    fn incoming_call_and_summary_edges(&self, callee_id: NodeId) -> Vec<&'a GraphEdge> {
         sdg_edge_kinds()
             .iter()
             .flat_map(|kind| indexed_edges_by_kinds(self.graph, &[*kind]))
             .filter(|edge| match &edge.fact {
-                EdgeFact::Calls(calls) => calls.callee_callable_id.as_deref() == Some(callee_id),
+                EdgeFact::Calls(calls) => calls.callee_callable_id == Some(callee_id),
                 EdgeFact::ParameterIn(parameter) => parameter.callee_callable_id == callee_id,
                 EdgeFact::ReturnsTo(returns) => returns.callee_callable_id == callee_id,
                 EdgeFact::ParameterOut(parameter) => parameter.callee_callable_id == callee_id,
@@ -1266,38 +1262,38 @@ enum SdgTraversalDirection {
 
 pub fn system_slice(
     graph: &ProgramSupergraph,
-    seed_id: &str,
+    seed_id: NodeId,
     direction: SdgTraversalDirection,
     include_requirements: bool,
 ) -> SystemDependenceSlice {
     let mut node_ids = BTreeSet::new();
     let mut edge_ids = BTreeSet::new();
-    let mut frontier = vec![seed_id.to_string()];
+    let mut frontier = vec![seed_id];
 
     while let Some(node_id) = frontier.pop() {
-        if !node_ids.insert(node_id.clone()) {
+        if !node_ids.insert(node_id) {
             continue;
         }
 
-        for value_id in seed_values_for_behavior(graph, &node_id) {
+        for value_id in seed_values_for_behavior(graph, node_id) {
             if !node_ids.contains(&value_id) {
                 frontier.push(value_id);
             }
         }
         if include_requirements {
-            for related_id in related_code_ids_for_value(graph, &node_id) {
+            for related_id in related_code_ids_for_value(graph, node_id) {
                 if !node_ids.contains(&related_id) {
                     frontier.push(related_id);
                 }
             }
         }
 
-        for edge in traversal_edges(graph, &node_id, direction, include_requirements) {
-            edge_ids.insert(edge.edge_id.clone());
+        for edge in traversal_edges(graph, node_id, direction, include_requirements) {
+            edge_ids.insert(edge.edge_id);
             let endpoint_id = if edge.source_id == node_id {
-                edge.target_id.clone()
+                edge.target_id
             } else {
-                Some(edge.source_id.clone())
+                Some(edge.source_id)
             };
             if let Some(endpoint_id) = endpoint_id
                 && !node_ids.contains(&endpoint_id)
@@ -1307,7 +1303,7 @@ pub fn system_slice(
         }
 
         if include_requirements {
-            for requirement_id in requirements_for_code_or_related_value(graph, &node_id) {
+            for requirement_id in requirements_for_code_or_related_value(graph, node_id) {
                 if !node_ids.contains(&requirement_id) {
                     frontier.push(requirement_id);
                 }
@@ -1317,22 +1313,22 @@ pub fn system_slice(
 
     let value_ids = node_ids
         .iter()
-        .filter(|node_id| is_value_node(graph, node_id))
-        .cloned()
+        .filter(|node_id| is_value_node(graph, **node_id))
+        .copied()
         .collect::<BTreeSet<_>>();
     let requirement_ids = node_ids
         .iter()
         .filter(|node_id| {
-            indexed_node(graph, node_id)
+            indexed_node(graph, **node_id)
                 .is_some_and(|node| matches!(&node.fact, NodeFact::Requirement(_)))
         })
-        .cloned()
+        .copied()
         .collect::<Vec<_>>();
     let callable_ids = callable_ids_for_slice(graph, &node_ids, &edge_ids);
     let diagnostic_ids = diagnostic_ids_for_slice(graph, &value_ids, &edge_ids);
 
     SystemDependenceSlice {
-        seed_id: seed_id.to_string(),
+        seed_id: seed_id,
         node_ids: node_ids.into_iter().collect(),
         value_ids: value_ids.into_iter().collect(),
         callable_ids,
@@ -1344,7 +1340,7 @@ pub fn system_slice(
 
 pub fn traversal_edges<'a>(
     graph: &'a ProgramSupergraph,
-    node_id: &str,
+    node_id: NodeId,
     direction: SdgTraversalDirection,
     include_requirements: bool,
 ) -> Vec<&'a GraphEdge> {
@@ -1411,7 +1407,7 @@ pub fn is_locatable_code_fact(node: &GraphNode) -> bool {
         ))
 }
 
-pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) -> BTreeSet<NodeId> {
+pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: NodeId) -> BTreeSet<NodeId> {
     let mut value_ids = BTreeSet::new();
     let Some(node) = indexed_node(graph, behavior_id) else {
         return value_ids;
@@ -1419,32 +1415,32 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) ->
 
     match &node.fact {
         NodeFact::Value(value) => {
-            value_ids.insert(value.value_id.clone());
+            value_ids.insert(value.value_id);
         }
         NodeFact::Definition(definition) => {
             if let Some(value_id) = &definition.value_id {
-                value_ids.insert(value_id.clone());
+                value_ids.insert(*value_id);
             }
         }
         NodeFact::Use(use_fact) => {
             if let Some(value_id) = &use_fact.value_id {
-                value_ids.insert(value_id.clone());
+                value_ids.insert(*value_id);
             }
         }
         NodeFact::Expression(expression) => {
             if let Some(value_id) = &expression.value_id {
-                value_ids.insert(value_id.clone());
+                value_ids.insert(*value_id);
             }
-            value_ids.extend(child_expression_values(graph, &expression.expression_id));
+            value_ids.extend(child_expression_values(graph, expression.expression_id));
         }
         NodeFact::Statement(statement) => {
             for expression_id in &statement.expression_ids {
-                value_ids.extend(expression_tree_values(graph, expression_id));
+                value_ids.extend(expression_tree_values(graph, *expression_id));
             }
         }
         NodeFact::Condition(condition) => {
             if let Some(expression_id) = &condition.expression_id {
-                value_ids.extend(expression_tree_values(graph, expression_id));
+                value_ids.extend(expression_tree_values(graph, *expression_id));
             }
         }
         NodeFact::ControlFlow(control) => match control.role {
@@ -1453,7 +1449,7 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) ->
             | ControlFlowNodeRole::Condition
             | ControlFlowNodeRole::Statement => {
                 if let Some(span) = node.span {
-                    value_ids.extend(values_at_span(graph, span, control.callable_id.as_str()));
+                    value_ids.extend(values_at_span(graph, span, control.callable_id));
                 }
             }
             ControlFlowNodeRole::Entry | ControlFlowNodeRole::Exit | ControlFlowNodeRole::Merge => {
@@ -1463,7 +1459,7 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) ->
             if data_flow.role == DataFlowNodeRole::Definition
                 && let Some(span) = node.span
             {
-                value_ids.extend(values_at_span(graph, span, &data_flow.callable_id));
+                value_ids.extend(values_at_span(graph, span, data_flow.callable_id));
             }
         }
         NodeFact::CallSite(call_site) => {
@@ -1471,7 +1467,7 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) ->
                 value_ids.extend(values_at_span(
                     graph,
                     span,
-                    &call_site.enclosing_callable_id,
+                    call_site.enclosing_callable_id,
                 ));
             }
         }
@@ -1490,7 +1486,7 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) ->
     value_ids
 }
 
-pub fn child_expression_values(graph: &ProgramSupergraph, expression_id: &str) -> BTreeSet<NodeId> {
+pub fn child_expression_values(graph: &ProgramSupergraph, expression_id: NodeId) -> BTreeSet<NodeId> {
     let Some(node) = indexed_node(graph, expression_id) else {
         return BTreeSet::new();
     };
@@ -1501,11 +1497,11 @@ pub fn child_expression_values(graph: &ProgramSupergraph, expression_id: &str) -
     expression
         .child_expression_ids
         .iter()
-        .flat_map(|child_id| expression_tree_values(graph, child_id))
+        .flat_map(|child_id| expression_tree_values(graph, *child_id))
         .collect()
 }
 
-pub fn expression_tree_values(graph: &ProgramSupergraph, expression_id: &str) -> BTreeSet<NodeId> {
+pub fn expression_tree_values(graph: &ProgramSupergraph, expression_id: NodeId) -> BTreeSet<NodeId> {
     let mut value_ids = BTreeSet::new();
     let Some(node) = indexed_node(graph, expression_id) else {
         return value_ids;
@@ -1515,10 +1511,10 @@ pub fn expression_tree_values(graph: &ProgramSupergraph, expression_id: &str) ->
     };
 
     if let Some(value_id) = &expression.value_id {
-        value_ids.insert(value_id.clone());
+        value_ids.insert(*value_id);
     }
     for child_id in &expression.child_expression_ids {
-        value_ids.extend(expression_tree_values(graph, child_id));
+        value_ids.extend(expression_tree_values(graph, *child_id));
     }
     value_ids
 }
@@ -1526,7 +1522,7 @@ pub fn expression_tree_values(graph: &ProgramSupergraph, expression_id: &str) ->
 pub fn values_at_span(
     graph: &ProgramSupergraph,
     span: SourceSpan,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> BTreeSet<NodeId> {
     graph
         .nodes
@@ -1536,17 +1532,17 @@ pub fn values_at_span(
                 .is_some_and(|node_span| spans_overlap(node_span, span))
         })
         .filter_map(|node| match &node.fact {
-            NodeFact::Value(value) if value.callable_id.as_deref() == Some(callable_id) => {
-                Some(value.value_id.clone())
+            NodeFact::Value(value) if value.callable_id == Some(callable_id) => {
+                Some(value.value_id)
             }
             NodeFact::Expression(expression) if expression.callable_id == callable_id => {
-                expression.value_id.clone()
+                expression.value_id
             }
             NodeFact::Definition(definition) if definition.callable_id == callable_id => {
-                definition.value_id.clone()
+                definition.value_id
             }
             NodeFact::Use(use_fact) if use_fact.callable_id == callable_id => {
-                use_fact.value_id.clone()
+                use_fact.value_id
             }
             _ => None,
         })
@@ -1559,16 +1555,16 @@ pub fn spans_overlap(left: SourceSpan, right: SourceSpan) -> bool {
 
 pub fn incoming_control_edges<'a>(
     graph: &'a ProgramSupergraph,
-    behavior_id: &str,
+    behavior_id: NodeId,
 ) -> Vec<&'a GraphEdge> {
-    let mut controlled_ids = BTreeSet::from([behavior_id.to_string()]);
+    let mut controlled_ids = BTreeSet::from([behavior_id]);
     controlled_ids.extend(related_cfg_ids_for_behavior(graph, behavior_id));
     controlled_ids.extend(related_behavior_projection_ids(graph, behavior_id));
 
     controlled_ids
         .iter()
         .flat_map(|controlled_id| {
-            indexed_incoming_edges_by_kind(graph, controlled_id, EdgeKind::Controls)
+            indexed_incoming_edges_by_kind(graph, *controlled_id, EdgeKind::Controls)
         })
         .filter(|edge| matches!(&edge.fact, EdgeFact::Controls(_)))
         .collect()
@@ -1576,7 +1572,7 @@ pub fn incoming_control_edges<'a>(
 
 pub fn related_behavior_projection_ids(
     graph: &ProgramSupergraph,
-    behavior_id: &str,
+    behavior_id: NodeId,
 ) -> BTreeSet<NodeId> {
     let mut related_ids = BTreeSet::new();
     let Some(node) = indexed_node(graph, behavior_id) else {
@@ -1588,16 +1584,15 @@ pub fn related_behavior_projection_ids(
     let callable_id = node
         .owner
         .callable_id
-        .as_deref()
         .or_else(|| match &node.fact {
-            NodeFact::CallSite(call_site) => Some(call_site.enclosing_callable_id.as_str()),
-            NodeFact::Statement(statement) => Some(statement.callable_id.as_str()),
-            NodeFact::Expression(expression) => Some(expression.callable_id.as_str()),
-            NodeFact::Definition(definition) => Some(definition.callable_id.as_str()),
-            NodeFact::Use(use_fact) => Some(use_fact.callable_id.as_str()),
-            NodeFact::Value(value) => value.callable_id.as_deref(),
-            NodeFact::ControlFlow(control) => Some(control.callable_id.as_str()),
-            NodeFact::DataFlow(data_flow) => Some(data_flow.callable_id.as_str()),
+            NodeFact::CallSite(call_site) => Some(call_site.enclosing_callable_id),
+            NodeFact::Statement(statement) => Some(statement.callable_id),
+            NodeFact::Expression(expression) => Some(expression.callable_id),
+            NodeFact::Definition(definition) => Some(definition.callable_id),
+            NodeFact::Use(use_fact) => Some(use_fact.callable_id),
+            NodeFact::Value(value) => value.callable_id,
+            NodeFact::ControlFlow(control) => Some(control.callable_id),
+            NodeFact::DataFlow(data_flow) => Some(data_flow.callable_id),
             _ => None,
         });
     let Some(callable_id) = callable_id else {
@@ -1611,16 +1606,16 @@ pub fn related_behavior_projection_ids(
     }) {
         match &candidate.fact {
             NodeFact::Statement(statement) if statement.callable_id == callable_id => {
-                related_ids.insert(candidate.node_id.clone());
+                related_ids.insert(candidate.node_id);
             }
             NodeFact::Expression(expression) if expression.callable_id == callable_id => {
-                related_ids.insert(candidate.node_id.clone());
+                related_ids.insert(candidate.node_id);
             }
             NodeFact::DataFlow(data_flow) if data_flow.callable_id == callable_id => {
-                related_ids.insert(candidate.node_id.clone());
+                related_ids.insert(candidate.node_id);
             }
             NodeFact::CallSite(call_site) if call_site.enclosing_callable_id == callable_id => {
-                related_ids.insert(candidate.node_id.clone());
+                related_ids.insert(candidate.node_id);
             }
             _ => {}
         }
@@ -1629,7 +1624,7 @@ pub fn related_behavior_projection_ids(
     related_ids
 }
 
-pub fn related_cfg_ids_for_behavior(graph: &ProgramSupergraph, behavior_id: &str) -> BTreeSet<NodeId> {
+pub fn related_cfg_ids_for_behavior(graph: &ProgramSupergraph, behavior_id: NodeId) -> BTreeSet<NodeId> {
     let mut cfg_ids = BTreeSet::new();
     let Some(node) = indexed_node(graph, behavior_id) else {
         return cfg_ids;
@@ -1640,16 +1635,15 @@ pub fn related_cfg_ids_for_behavior(graph: &ProgramSupergraph, behavior_id: &str
     let callable_id = node
         .owner
         .callable_id
-        .as_deref()
         .or_else(|| match &node.fact {
-            NodeFact::CallSite(call_site) => Some(call_site.enclosing_callable_id.as_str()),
-            NodeFact::Statement(statement) => Some(statement.callable_id.as_str()),
-            NodeFact::Expression(expression) => Some(expression.callable_id.as_str()),
-            NodeFact::Definition(definition) => Some(definition.callable_id.as_str()),
-            NodeFact::Use(use_fact) => Some(use_fact.callable_id.as_str()),
-            NodeFact::Value(value) => value.callable_id.as_deref(),
-            NodeFact::ControlFlow(control) => Some(control.callable_id.as_str()),
-            NodeFact::DataFlow(data_flow) => Some(data_flow.callable_id.as_str()),
+            NodeFact::CallSite(call_site) => Some(call_site.enclosing_callable_id),
+            NodeFact::Statement(statement) => Some(statement.callable_id),
+            NodeFact::Expression(expression) => Some(expression.callable_id),
+            NodeFact::Definition(definition) => Some(definition.callable_id),
+            NodeFact::Use(use_fact) => Some(use_fact.callable_id),
+            NodeFact::Value(value) => value.callable_id,
+            NodeFact::ControlFlow(control) => Some(control.callable_id),
+            NodeFact::DataFlow(data_flow) => Some(data_flow.callable_id),
             _ => None,
         });
     let Some(callable_id) = callable_id else {
@@ -1666,7 +1660,7 @@ pub fn related_cfg_ids_for_behavior(graph: &ProgramSupergraph, behavior_id: &str
         if let NodeFact::ControlFlow(control) = &candidate.fact
             && control.callable_id == callable_id
         {
-            cfg_ids.insert(candidate.node_id.clone());
+            cfg_ids.insert(candidate.node_id);
         }
     }
 
@@ -1675,7 +1669,7 @@ pub fn related_cfg_ids_for_behavior(graph: &ProgramSupergraph, behavior_id: &str
 
 pub fn path_conditions_for_behavior(
     graph: &ProgramSupergraph,
-    behavior_id: &str,
+    behavior_id: NodeId,
     controls: &[&GraphEdge],
 ) -> Vec<sg::PathConditionSummary> {
     let mut summaries = Vec::new();
@@ -1683,12 +1677,12 @@ pub fn path_conditions_for_behavior(
     for requirement_id in graph
         .indexes
         .code_to_requirements
-        .get(behavior_id)
+        .get(&behavior_id)
         .into_iter()
         .flatten()
     {
         if let Some(requirement) =
-            indexed_node(graph, requirement_id).and_then(|node| match &node.fact {
+            indexed_node(graph, *requirement_id).and_then(|node| match &node.fact {
                 NodeFact::Requirement(requirement) => Some(requirement),
                 _ => None,
             })
@@ -1702,30 +1696,30 @@ pub fn path_conditions_for_behavior(
             continue;
         };
         summaries.push(sg::PathConditionSummary {
-            controlling_cfg_node_id: controls.condition_id.clone(),
-            condition_id: structured_condition_id_for_cfg_node(graph, &controls.condition_id),
-            expression_id: structured_condition_id_for_cfg_node(graph, &controls.condition_id)
-                .and_then(|condition_id| indexed_node(graph, &condition_id))
+            controlling_cfg_node_id: controls.condition_id,
+            condition_id: structured_condition_id_for_cfg_node(graph, controls.condition_id),
+            expression_id: structured_condition_id_for_cfg_node(graph, controls.condition_id)
+                .and_then(|condition_id| indexed_node(graph, condition_id))
                 .and_then(|node| match &node.fact {
-                    NodeFact::Condition(condition) => condition.expression_id.clone(),
+                    NodeFact::Condition(condition) => condition.expression_id,
                     _ => None,
                 }),
             outcome: sg::ControlFlowOutcome::Unknown,
             branch_arm: None,
-            summary: condition_summary(graph, &controls.condition_id),
+            summary: condition_summary(graph, controls.condition_id),
         });
     }
 
     summaries.sort_by(|left, right| {
         (
-            left.condition_id.as_deref(),
-            left.controlling_cfg_node_id.as_str(),
+            left.condition_id,
+            left.controlling_cfg_node_id,
             left.outcome,
             left.summary.as_str(),
         )
             .cmp(&(
-                right.condition_id.as_deref(),
-                right.controlling_cfg_node_id.as_str(),
+                right.condition_id,
+                right.controlling_cfg_node_id,
                 right.outcome,
                 right.summary.as_str(),
             ))
@@ -1736,7 +1730,7 @@ pub fn path_conditions_for_behavior(
 
 pub fn structured_condition_id_for_cfg_node(
     graph: &ProgramSupergraph,
-    cfg_node_id: &str,
+    cfg_node_id: NodeId,
 ) -> Option<NodeId> {
     let cfg_node = indexed_node(graph, cfg_node_id)?;
     let span = cfg_node.span?;
@@ -1750,13 +1744,13 @@ pub fn structured_condition_id_for_cfg_node(
             NodeFact::Condition(condition)
                 if condition.callable_id == control.callable_id && node.span == Some(span) =>
             {
-                Some(condition.condition_id.clone())
+                Some(condition.condition_id)
             }
             _ => None,
         })
 }
 
-pub fn condition_summary(graph: &ProgramSupergraph, cfg_node_id: &str) -> String {
+pub fn condition_summary(graph: &ProgramSupergraph, cfg_node_id: NodeId) -> String {
     indexed_node(graph, cfg_node_id)
         .and_then(|node| match &node.fact {
             NodeFact::ControlFlow(control) => Some(format!("controlled by `{}`", control.label)),
@@ -1772,20 +1766,19 @@ pub fn diagnostic_ids_for_slice(
 ) -> Vec<NodeId> {
     let mut related_ids = value_ids.clone();
     for edge_id in edge_ids {
-        related_ids.insert(edge_id.clone());
-        if let Some(edge) = indexed_edge(graph, edge_id) {
-            related_ids.insert(edge.source_id.clone());
+        if let Some(edge) = indexed_edge(graph, *edge_id) {
+            related_ids.insert(edge.source_id);
             if let Some(target_id) = &edge.target_id {
-                related_ids.insert(target_id.clone());
+                related_ids.insert(*target_id);
             }
         }
     }
     for value_id in value_ids {
-        if let Some(NodeFact::Value(value)) = indexed_node(graph, value_id).map(|node| &node.fact) {
-            related_ids.extend(value.expression_id.iter().cloned());
-            related_ids.extend(value.call_site_id.iter().cloned());
-            related_ids.extend(value.symbol_id.iter().cloned());
-            related_ids.extend(value.state_of_value_id.iter().cloned());
+        if let Some(NodeFact::Value(value)) = indexed_node(graph, *value_id).map(|node| &node.fact) {
+            related_ids.extend(value.expression_id.iter().copied());
+            related_ids.extend(value.call_site_id.iter().copied());
+            related_ids.extend(value.symbol_id.iter().copied());
+            related_ids.extend(value.state_of_value_id.iter().copied());
         }
     }
 
@@ -1799,14 +1792,14 @@ pub fn diagnostic_ids_for_slice(
                     .iter()
                     .any(|related_id| related_ids.contains(related_id)) =>
             {
-                Some(diagnostic.diagnostic_id.clone())
+                Some(diagnostic.diagnostic_id)
             }
             _ => None,
         })
         .collect()
 }
 
-pub fn is_value_node(graph: &ProgramSupergraph, node_id: &str) -> bool {
+pub fn is_value_node(graph: &ProgramSupergraph, node_id: NodeId) -> bool {
     indexed_node(graph, node_id).is_some_and(|node| matches!(&node.fact, NodeFact::Value(_)))
 }
 
@@ -1832,7 +1825,7 @@ pub fn dfg_value_edge_kinds() -> &'static [EdgeKind] {
     ]
 }
 
-pub fn edge_mentions_callable(edge: &GraphEdge, callable_id: &str) -> bool {
+pub fn edge_mentions_callable(edge: &GraphEdge, callable_id: NodeId) -> bool {
     match &edge.fact {
         EdgeFact::Defines(defines) => defines.callable_id == callable_id,
         EdgeFact::Uses(uses) => uses.callable_id == callable_id,
@@ -1857,50 +1850,50 @@ pub fn edge_mentions_callable(edge: &GraphEdge, callable_id: &str) -> bool {
 
 pub fn indexed_outgoing_edges_by_kind<'a>(
     graph: &'a ProgramSupergraph,
-    node_id: &str,
+    node_id: NodeId,
     kind: EdgeKind,
 ) -> Vec<&'a GraphEdge> {
     graph
         .indexes
         .outgoing_edges_by_node_and_kind
-        .get(node_id)
+        .get(&node_id)
         .and_then(|edges_by_kind| edges_by_kind.get(&kind))
         .into_iter()
         .flatten()
-        .filter_map(|edge_id| indexed_edge(graph, edge_id))
+        .filter_map(|edge_id| indexed_edge(graph, *edge_id))
         .collect()
 }
 
 pub fn indexed_incoming_edges_by_kind<'a>(
     graph: &'a ProgramSupergraph,
-    node_id: &str,
+    node_id: NodeId,
     kind: EdgeKind,
 ) -> Vec<&'a GraphEdge> {
     graph
         .indexes
         .incoming_edges_by_node_and_kind
-        .get(node_id)
+        .get(&node_id)
         .and_then(|edges_by_kind| edges_by_kind.get(&kind))
         .into_iter()
         .flatten()
-        .filter_map(|edge_id| indexed_edge(graph, edge_id))
+        .filter_map(|edge_id| indexed_edge(graph, *edge_id))
         .collect()
 }
 
-pub fn indexed_node<'a>(graph: &'a ProgramSupergraph, node_id: &str) -> Option<&'a GraphNode> {
+pub fn indexed_node<'a>(graph: &'a ProgramSupergraph, node_id: NodeId) -> Option<&'a GraphNode> {
     graph
         .indexes
         .node_position_by_id
-        .get(node_id)
+        .get(&node_id)
         .and_then(|position| graph.nodes.get(*position))
         .filter(|node| node.node_id == node_id)
 }
 
-pub fn indexed_edge<'a>(graph: &'a ProgramSupergraph, edge_id: &str) -> Option<&'a GraphEdge> {
+pub fn indexed_edge<'a>(graph: &'a ProgramSupergraph, edge_id: sg::EdgeId) -> Option<&'a GraphEdge> {
     graph
         .indexes
         .edge_position_by_id
-        .get(edge_id)
+        .get(&edge_id)
         .and_then(|position| graph.edges.get(*position))
         .filter(|edge| edge.edge_id == edge_id)
 }
@@ -1912,7 +1905,7 @@ pub fn indexed_nodes_by_kind(graph: &ProgramSupergraph, kind: sg::NodeKind) -> V
         .get(&kind)
         .into_iter()
         .flatten()
-        .filter_map(|node_id| indexed_node(graph, node_id))
+        .filter_map(|node_id| indexed_node(graph, *node_id))
         .collect()
 }
 
@@ -1924,38 +1917,38 @@ pub fn indexed_edges_by_kinds<'a>(
         .iter()
         .filter_map(|kind| graph.indexes.edges_by_kind.get(kind))
         .flatten()
-        .filter_map(|edge_id| indexed_edge(graph, edge_id))
+        .filter_map(|edge_id| indexed_edge(graph, *edge_id))
         .collect()
 }
 
-pub fn indexed_call_edge_ids(graph: &ProgramSupergraph, filter: &CallGraphFilter) -> Vec<String> {
+pub fn indexed_call_edge_ids(graph: &ProgramSupergraph, filter: &CallGraphFilter) -> Vec<sg::EdgeId> {
     let mut edge_ids = BTreeSet::new();
     if !filter.caller_ids.is_empty() {
         for caller_id in &filter.caller_ids {
             if let Some(calls) = graph.indexes.calls_by_caller.get(caller_id) {
-                edge_ids.extend(calls.iter().cloned());
+                edge_ids.extend(calls.iter().copied());
             }
         }
     } else if !filter.callee_ids.is_empty() {
         for target_id in &filter.callee_ids {
             if let Some(calls) = graph.indexes.calls_by_concrete_target.get(target_id) {
-                edge_ids.extend(calls.iter().cloned());
+                edge_ids.extend(calls.iter().copied());
             }
         }
     } else if !filter.call_site_ids.is_empty() {
         for call_site_id in &filter.call_site_ids {
             if let Some(calls) = graph.indexes.call_site_to_calls.get(call_site_id) {
-                edge_ids.extend(calls.iter().cloned());
+                edge_ids.extend(calls.iter().copied());
             }
         }
     } else if !filter.artifact_ids.is_empty() {
         for artifact_id in &filter.artifact_ids {
             if let Some(edges) = graph.indexes.owner_to_edges.get(artifact_id) {
-                edge_ids.extend(edges.iter().cloned());
+                edge_ids.extend(edges.iter().copied());
             }
         }
     } else if let Some(calls) = graph.indexes.edges_by_kind.get(&EdgeKind::Calls) {
-        edge_ids.extend(calls.iter().cloned());
+        edge_ids.extend(calls.iter().copied());
     }
 
     edge_ids.into_iter().collect()
@@ -1971,23 +1964,23 @@ pub fn requirement_edge_kinds() -> &'static [EdgeKind] {
     ]
 }
 
-pub fn related_code_ids_for_value(graph: &ProgramSupergraph, value_id: &str) -> BTreeSet<NodeId> {
+pub fn related_code_ids_for_value(graph: &ProgramSupergraph, value_id: NodeId) -> BTreeSet<NodeId> {
     let mut related_ids = BTreeSet::new();
     let Some(NodeFact::Value(value)) = indexed_node(graph, value_id).map(|node| &node.fact) else {
         return related_ids;
     };
 
-    related_ids.extend(value.expression_id.iter().cloned());
-    related_ids.extend(value.call_site_id.iter().cloned());
+    related_ids.extend(value.expression_id.iter().copied());
+    related_ids.extend(value.call_site_id.iter().copied());
     for node in &graph.nodes {
         match &node.fact {
             NodeFact::Definition(definition)
-                if definition.value_id.as_deref() == Some(value_id) =>
+                if definition.value_id == Some(value_id) =>
             {
-                related_ids.insert(definition.definition_id.clone());
+                related_ids.insert(definition.definition_id);
             }
-            NodeFact::Use(use_fact) if use_fact.value_id.as_deref() == Some(value_id) => {
-                related_ids.insert(use_fact.use_id.clone());
+            NodeFact::Use(use_fact) if use_fact.value_id == Some(value_id) => {
+                related_ids.insert(use_fact.use_id);
             }
             _ => {}
         }
@@ -1998,15 +1991,15 @@ pub fn related_code_ids_for_value(graph: &ProgramSupergraph, value_id: &str) -> 
 
 pub fn requirements_for_code_or_related_value(
     graph: &ProgramSupergraph,
-    code_or_value_id: &str,
+    code_or_value_id: NodeId,
 ) -> BTreeSet<NodeId> {
     let mut requirement_ids = graph
         .indexes
         .code_to_requirements
-        .get(code_or_value_id)
+        .get(&code_or_value_id)
         .into_iter()
         .flatten()
-        .cloned()
+        .copied()
         .collect::<BTreeSet<_>>();
     for related_id in related_code_ids_for_value(graph, code_or_value_id) {
         requirement_ids.extend(
@@ -2016,7 +2009,7 @@ pub fn requirements_for_code_or_related_value(
                 .get(&related_id)
                 .into_iter()
                 .flatten()
-                .cloned(),
+                .copied(),
         );
     }
     requirement_ids
@@ -2029,71 +2022,71 @@ pub fn callable_ids_for_slice(
 ) -> Vec<NodeId> {
     let mut callable_ids = BTreeSet::new();
     for node_id in node_ids {
-        if let Some(node) = indexed_node(graph, node_id) {
-            callable_ids.extend(node.owner.callable_id.iter().cloned());
+        if let Some(node) = indexed_node(graph, *node_id) {
+            callable_ids.extend(node.owner.callable_id.iter().copied());
             match &node.fact {
                 NodeFact::Callable(callable) => {
-                    callable_ids.insert(callable.callable_id.clone());
+                    callable_ids.insert(callable.callable_id);
                 }
                 NodeFact::CallSite(call_site) => {
-                    callable_ids.insert(call_site.enclosing_callable_id.clone());
+                    callable_ids.insert(call_site.enclosing_callable_id);
                 }
                 NodeFact::Value(value) => {
-                    callable_ids.extend(value.callable_id.iter().cloned());
+                    callable_ids.extend(value.callable_id.iter().copied());
                 }
                 NodeFact::ControlFlow(control) => {
-                    callable_ids.insert(control.callable_id.clone());
+                    callable_ids.insert(control.callable_id);
                 }
                 NodeFact::DataFlow(data_flow) => {
-                    callable_ids.insert(data_flow.callable_id.clone());
+                    callable_ids.insert(data_flow.callable_id);
                 }
                 NodeFact::Definition(definition) => {
-                    callable_ids.insert(definition.callable_id.clone());
+                    callable_ids.insert(definition.callable_id);
                 }
                 NodeFact::Use(use_fact) => {
-                    callable_ids.insert(use_fact.callable_id.clone());
+                    callable_ids.insert(use_fact.callable_id);
                 }
                 NodeFact::Expression(expression) => {
-                    callable_ids.insert(expression.callable_id.clone());
+                    callable_ids.insert(expression.callable_id);
                 }
                 NodeFact::Statement(statement) => {
-                    callable_ids.insert(statement.callable_id.clone());
+                    callable_ids.insert(statement.callable_id);
                 }
                 NodeFact::Condition(condition) => {
-                    callable_ids.insert(condition.callable_id.clone());
+                    callable_ids.insert(condition.callable_id);
                 }
                 _ => {}
             }
         }
     }
     for edge_id in edge_ids {
-        if let Some(edge) = indexed_edge(graph, edge_id) {
+        if let Some(edge) = indexed_edge(graph, *edge_id) {
             match &edge.fact {
                 EdgeFact::Controls(controls) => {
-                    callable_ids.insert(controls.callable_id.clone());
+                    callable_ids.insert(controls.callable_id);
                 }
                 EdgeFact::DataFlow(data_flow) => {
-                    callable_ids.insert(data_flow.callable_id.clone());
+                    callable_ids.insert(data_flow.callable_id);
                 }
                 EdgeFact::Calls(calls) => {
-                    callable_ids.insert(calls.caller_callable_id.clone());
-                    callable_ids.extend(calls.callee_callable_id.iter().cloned());
+                    callable_ids.insert(calls.caller_callable_id);
+                    callable_ids.extend(calls.callee_callable_id.iter().copied());
                 }
                 EdgeFact::ParameterIn(parameter) => {
-                    callable_ids.insert(parameter.caller_callable_id.clone());
-                    callable_ids.insert(parameter.callee_callable_id.clone());
+                    callable_ids.insert(parameter.caller_callable_id);
+                    callable_ids.insert(parameter.callee_callable_id);
                 }
                 EdgeFact::ReturnsTo(returns) => {
-                    callable_ids.insert(returns.caller_callable_id.clone());
-                    callable_ids.insert(returns.callee_callable_id.clone());
+                    callable_ids.insert(returns.caller_callable_id);
+                    callable_ids.insert(returns.callee_callable_id);
                 }
                 EdgeFact::ParameterOut(parameter) => {
-                    callable_ids.insert(parameter.caller_callable_id.clone());
-                    callable_ids.insert(parameter.callee_callable_id.clone());
+                    callable_ids.insert(parameter.caller_callable_id);
+                    callable_ids.insert(parameter.callee_callable_id);
                 }
                 EdgeFact::ThrowsTo(throws) => {
-                    callable_ids.insert(throws.caller_callable_id.clone());
-                    callable_ids.insert(throws.callee_callable_id.clone());
+                    callable_ids.insert(throws.caller_callable_id);
+                    callable_ids.insert(throws.callee_callable_id);
                 }
                 _ => {}
             }
@@ -2105,23 +2098,23 @@ pub fn callable_ids_for_slice(
 pub fn caller_and_call_site_for_impact(edge: &GraphEdge) -> Option<(NodeId, NodeId)> {
     match &edge.fact {
         EdgeFact::Calls(calls) => {
-            Some((calls.caller_callable_id.clone(), calls.call_site_id.clone()))
+            Some((calls.caller_callable_id, calls.call_site_id))
         }
         EdgeFact::ParameterIn(parameter) => Some((
-            parameter.caller_callable_id.clone(),
-            parameter.call_site_id.clone(),
+            parameter.caller_callable_id,
+            parameter.call_site_id,
         )),
         EdgeFact::ReturnsTo(returns) => Some((
-            returns.caller_callable_id.clone(),
-            returns.call_site_id.clone(),
+            returns.caller_callable_id,
+            returns.call_site_id,
         )),
         EdgeFact::ParameterOut(parameter) => Some((
-            parameter.caller_callable_id.clone(),
-            parameter.call_site_id.clone(),
+            parameter.caller_callable_id,
+            parameter.call_site_id,
         )),
         EdgeFact::ThrowsTo(throws) => Some((
-            throws.caller_callable_id.clone(),
-            throws.call_site_id.clone(),
+            throws.caller_callable_id,
+            throws.call_site_id,
         )),
         _ => None,
     }
@@ -2133,16 +2126,7 @@ pub fn requirements_for_edges(
 ) -> Vec<NodeId> {
     let mut requirement_ids = BTreeSet::new();
     for edge_id in edge_ids {
-        requirement_ids.extend(
-            graph
-                .indexes
-                .code_to_requirements
-                .get(edge_id)
-                .into_iter()
-                .flatten()
-                .cloned(),
-        );
-        if let Some(edge) = indexed_edge(graph, edge_id) {
+        if let Some(edge) = indexed_edge(graph, *edge_id) {
             requirement_ids.extend(
                 graph
                     .indexes
@@ -2150,7 +2134,7 @@ pub fn requirements_for_edges(
                     .get(&edge.source_id)
                     .into_iter()
                     .flatten()
-                    .cloned(),
+                    .copied(),
             );
             if let Some(target_id) = &edge.target_id {
                 requirement_ids.extend(
@@ -2160,7 +2144,7 @@ pub fn requirements_for_edges(
                         .get(target_id)
                         .into_iter()
                         .flatten()
-                        .cloned(),
+                        .copied(),
                 );
             }
         }

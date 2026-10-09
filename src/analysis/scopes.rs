@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::SourceSpan;
+use crate::supergraph::ids::Tag;
 use crate::supergraph::{
     self as sg, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind, NodeFact, NodeId, NodeKind,
     ProgramSupergraph, ScopeBindingBehavior, ScopeKind, ScopeVariant, SourceOwnership,
@@ -81,12 +82,12 @@ fn emit_region_scopes(graph: &mut ProgramSupergraph) {
             };
             planned.push(PlannedScope {
                 scope_id: stable_id(
-                    "scope",
-                    &[
+                    Tag::Scope,
+                    crate::id_parts![
                         artifact_id,
                         "region",
-                        &condition.callable_id,
-                        &node.node_id,
+                        condition.callable_id,
+                        node.node_id,
                         &region.label,
                         &span_key(region_span),
                     ],
@@ -159,12 +160,12 @@ fn emit_declaration_scopes(graph: &mut ProgramSupergraph, context: &SemanticCont
             };
             planned.push(PlannedScope {
                 scope_id: stable_id(
-                    "scope",
-                    &[
-                        &artifact.artifact_id,
+                    Tag::Scope,
+                    crate::id_parts![
+                        artifact.artifact_id,
                         "declaration",
                         scope_kind_key(kind),
-                        &semantic.callable().callable_id,
+                        semantic.callable().callable_id,
                         &span_key(statement.source_span),
                     ],
                 ),
@@ -203,11 +204,11 @@ fn emit_comprehension_scopes(graph: &mut ProgramSupergraph) {
         }
         planned.push(PlannedScope {
             scope_id: stable_id(
-                "scope",
-                &[
+                Tag::Scope,
+                crate::id_parts![
                     artifact_id,
                     "comprehension",
-                    &expression.callable_id,
+                    expression.callable_id,
                     &span_key(span),
                 ],
             ),
@@ -232,7 +233,7 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
             planned.span,
-            &planned.scope_id,
+            planned.scope_id,
         );
         let binding_behavior = binding_behavior(planned.kind, planned.language.as_str());
         let owner = SourceOwnership {
@@ -247,7 +248,7 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
                 planned.span,
                 Confidence::Exact,
                 parser_evidence(
-                    &planned.artifact_id,
+                    planned.artifact_id,
                     planned.span,
                     scope_kind_key(planned.kind),
                     "normalized lexical scope fact",
@@ -282,12 +283,12 @@ fn insert_planned_scopes(graph: &mut ProgramSupergraph, planned: Vec<PlannedScop
         if let Some(parent_scope_id) = parent_scope_id {
             add_contains_edge(
                 graph,
-                &parent_scope_id,
-                &planned.scope_id,
+                parent_scope_id,
+                planned.scope_id,
                 owner,
                 planned.span,
                 parser_evidence(
-                    &planned.artifact_id,
+                    planned.artifact_id,
                     planned.span,
                     scope_kind_key(planned.kind),
                     "lexical scope containment",
@@ -356,14 +357,14 @@ fn emit_scope_member_edges(graph: &mut ProgramSupergraph) {
     }
 
     for (scope_id, member_id, owner, span, evidence) in planned {
-        add_contains_edge(graph, &scope_id, &member_id, owner, span, evidence);
+        add_contains_edge(graph, scope_id, member_id, owner, span, evidence);
     }
 }
 
 fn add_contains_edge(
     graph: &mut ProgramSupergraph,
-    container_id: &str,
-    member_id: &str,
+    container_id: NodeId,
+    member_id: NodeId,
     owner: SourceOwnership,
     span: Option<SourceSpan>,
     evidence: Vec<Evidence>,
@@ -373,15 +374,15 @@ fn add_contains_edge(
         graph_edge(
             edge_id("contains", container_id, member_id, CONTAINMENT_PRECISION),
             EdgeKind::Contains,
-            container_id.to_string(),
-            member_id.to_string(),
+            container_id,
+            member_id,
             owner,
             span,
             Confidence::Exact,
             evidence,
             EdgeFact::Contains(sg::Contains {
-                container_id: container_id.to_string(),
-                member_id: member_id.to_string(),
+                container_id,
+                member_id,
             }),
         ),
     );
@@ -410,7 +411,7 @@ fn scope_infos_by_artifact(graph: &ProgramSupergraph) -> HashMap<NodeId, Vec<Sco
 fn nearest_parent_scope(
     scopes: &[ScopeInfo],
     span: Option<SourceSpan>,
-    scope_id: &str,
+    scope_id: NodeId,
 ) -> Option<NodeId> {
     let Some(span) = span else {
         return scopes
@@ -626,7 +627,7 @@ fn is_comprehension_expression(language: &str, text: Option<&str>) -> bool {
 }
 
 fn parser_evidence(
-    artifact_id: &str,
+    artifact_id: NodeId,
     span: Option<SourceSpan>,
     syntax_kind: &str,
     summary: &str,
@@ -634,7 +635,7 @@ fn parser_evidence(
     vec![Evidence {
         kind: EvidenceKind::Parser,
         summary: summary.to_string(),
-        source_id: Some(artifact_id.to_string()),
+        source_id: Some(artifact_id),
         source_span: span,
         content_hash: None,
         syntax: Some(SyntaxReference {
@@ -699,22 +700,22 @@ mod tests {
         let outer_scope = callable_scope(&graph, "sample.outer");
         let branch_assignment = statement_at(&graph, span(60, 70));
         assert_eq!(
-            branch_assignment.owner.scope_id.as_deref(),
+            branch_assignment.owner.scope_id,
             Some(outer_scope)
         );
 
         let comprehension_scope = scope_at(&graph, ScopeKind::Comprehension, span(190, 215));
         let comprehension_expr = expression_at(&graph, span(190, 215));
         assert_eq!(
-            comprehension_expr.owner.scope_id.as_deref(),
-            Some(comprehension_scope.scope_id.as_str())
+            comprehension_expr.owner.scope_id,
+            Some(comprehension_scope.scope_id)
         );
 
         let nested_function_scope = scope_at(&graph, ScopeKind::Function, span(72, 95));
         assert_contains(
             &graph,
-            nested_function_scope.parent_scope_id.as_ref().unwrap(),
-            &nested_function_scope.scope_id,
+            nested_function_scope.parent_scope_id.unwrap(),
+            nested_function_scope.scope_id,
         );
     }
 
@@ -741,26 +742,26 @@ mod tests {
         let block_scope = scope_at(&graph, ScopeKind::Block, span(60, 95));
         let branch_assignment = statement_at(&graph, span(60, 70));
         assert_eq!(
-            branch_assignment.owner.scope_id.as_deref(),
-            Some(block_scope.scope_id.as_str())
+            branch_assignment.owner.scope_id,
+            Some(block_scope.scope_id)
         );
 
         let nested_function_scope = scope_at(&graph, ScopeKind::Function, span(72, 95));
         assert_eq!(
-            nested_function_scope.parent_scope_id.as_deref(),
-            Some(block_scope.scope_id.as_str())
+            nested_function_scope.parent_scope_id,
+            Some(block_scope.scope_id)
         );
         assert_contains(
             &graph,
-            &block_scope.scope_id,
-            &nested_function_scope.scope_id,
+            block_scope.scope_id,
+            nested_function_scope.scope_id,
         );
 
         let catch_scope = scope_at(&graph, ScopeKind::Catch, span(136, 145));
         let handler_statement = statement_at(&graph, span(136, 145));
         assert_eq!(
-            handler_statement.owner.scope_id.as_deref(),
-            Some(catch_scope.scope_id.as_str())
+            handler_statement.owner.scope_id,
+            Some(catch_scope.scope_id)
         );
     }
 
@@ -787,13 +788,13 @@ mod tests {
         );
     }
 
-    fn callable_scope<'a>(graph: &'a ProgramSupergraph, qualified_name: &str) -> &'a str {
+    fn callable_scope<'a>(graph: &'a ProgramSupergraph, qualified_name: &str) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Callable(callable) if callable.qualified_name == qualified_name => {
-                    Some(callable.scope_id.as_str())
+                    Some(callable.scope_id)
                 }
                 _ => None,
             })
@@ -823,12 +824,12 @@ mod tests {
             .unwrap_or_else(|| panic!("missing expression at {span:?}"))
     }
 
-    fn assert_contains(graph: &ProgramSupergraph, container_id: &str, member_id: &str) {
+    fn assert_contains(graph: &ProgramSupergraph, container_id: NodeId, member_id: NodeId) {
         assert!(
             graph.edges.iter().any(|edge| {
                 edge.kind == EdgeKind::Contains
                     && edge.source_id == container_id
-                    && edge.target_id.as_deref() == Some(member_id)
+                    && edge.target_id == Some(member_id)
             }),
             "missing Contains edge {container_id} -> {member_id}"
         );

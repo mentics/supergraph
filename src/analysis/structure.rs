@@ -5,9 +5,11 @@ use crate::supergraph::{
     self as sg, ConditionKind, Confidence, ContinuationKind, ContinuationPoint, ControlRegion,
     ControlRegionKind, EdgeFact, EdgeKind, Evidence, EvidenceKind, FallthroughBehavior, NodeFact,
     NodeId, NodeKind, ProgramSupergraph, StatementControlEffect, StatementControlEffectKind,
-    StatementKind, SyntaxReference, stable_id,
+    StatementKind, SyntaxReference, stable_edge_id, stable_id,
 };
 
+use crate::id_parts;
+use crate::supergraph::ids::Tag;
 use super::{
     SemanticCallable, SemanticContext, callable_index::CallableIndex, graph_edge, graph_node,
     insert_edge, insert_node,
@@ -56,7 +58,7 @@ fn emit_callable(
         }
     }
 
-    apply_statement_control_effects(graph, index, &semantic.callable().callable_id, &statements);
+    apply_statement_control_effects(graph, index, semantic.callable().callable_id, &statements);
     index.sync(graph);
     add_condition_contains_edges(graph, index, semantic, &condition_ids);
 }
@@ -111,9 +113,8 @@ fn emit_condition_region(
         FallthroughBehavior::FallsThrough
     };
 
-    let condition_id = stable_id(
-        "condition",
-        &[
+    let condition_id = stable_id(Tag::Condition,
+        id_parts![
             &semantic.callable().callable_id,
             condition_kind_key(kind),
             &span_key(condition.source_span),
@@ -123,7 +124,7 @@ fn emit_condition_region(
     insert_node(
         graph,
         graph_node(
-            condition_id.clone(),
+            condition_id,
             NodeKind::Condition,
             node_owner(semantic),
             Some(condition.source_span),
@@ -135,9 +136,9 @@ fn emit_condition_region(
                 "structured branch/loop region fact",
             ),
             NodeFact::Condition(sg::Condition {
-                condition_id: condition_id.clone(),
-                callable_id: semantic.callable().callable_id.clone(),
-                statement_id: Some(controller.statement_id.clone()),
+                condition_id: condition_id,
+                callable_id: semantic.callable().callable_id,
+                statement_id: Some(controller.statement_id),
                 expression_id,
                 kind,
                 controlled_statement_ids,
@@ -165,9 +166,8 @@ fn emit_exception_region(
         .iter()
         .flat_map(|region| region.statement_ids.iter().cloned())
         .collect::<Vec<_>>();
-    let condition_id = stable_id(
-        "condition",
-        &[
+    let condition_id = stable_id(Tag::Condition,
+        id_parts![
             &semantic.callable().callable_id,
             "exception-region",
             &statement.statement_id,
@@ -177,7 +177,7 @@ fn emit_exception_region(
     insert_node(
         graph,
         graph_node(
-            condition_id.clone(),
+            condition_id,
             NodeKind::Condition,
             node_owner(semantic),
             Some(statement.span),
@@ -189,9 +189,9 @@ fn emit_exception_region(
                 "structured try/catch/finally region fact",
             ),
             NodeFact::Condition(sg::Condition {
-                condition_id: condition_id.clone(),
-                callable_id: semantic.callable().callable_id.clone(),
-                statement_id: Some(statement.statement_id.clone()),
+                condition_id: condition_id,
+                callable_id: semantic.callable().callable_id,
+                statement_id: Some(statement.statement_id),
                 expression_id: None,
                 kind: if statement.kind == StatementKind::Catch {
                     ConditionKind::CatchFilter
@@ -217,18 +217,18 @@ fn emit_exception_region(
 fn apply_statement_control_effects(
     graph: &mut ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     statements: &[StatementInfo],
 ) {
     let mut info_by_id = HashMap::new();
     for info in statements {
-        info_by_id.entry(info.statement_id.as_str()).or_insert(info);
+        info_by_id.entry(info.statement_id).or_insert(info);
     }
     for &position in index.positions(callable_id) {
         let NodeFact::Statement(statement) = &mut graph.nodes[position].fact else {
             continue;
         };
-        let Some(info) = info_by_id.get(statement.statement_id.as_str()).copied() else {
+        let Some(info) = info_by_id.get(&statement.statement_id).copied() else {
             continue;
         };
         let next = next_statement_id(info, statements);
@@ -303,7 +303,7 @@ fn add_condition_contains_edges(
     condition_ids: &[NodeId],
 ) {
     for condition_id in condition_ids {
-        let Some(condition) = condition_fact(graph, index, condition_id).cloned() else {
+        let Some(condition) = condition_fact(graph, index, *condition_id).cloned() else {
             continue;
         };
         for region in &condition.regions {
@@ -311,13 +311,11 @@ fn add_condition_contains_edges(
                 insert_edge(
                     graph,
                     graph_edge(
-                        stable_id(
-                            "edge",
-                            &["contains", condition_id, member_id, CONTAINMENT_PRECISION],
+                        stable_edge_id(id_parts!["contains", condition_id, member_id, CONTAINMENT_PRECISION],
                         ),
                         EdgeKind::Contains,
-                        condition_id.clone(),
-                        member_id.clone(),
+                        *condition_id,
+                        *member_id,
                         node_owner(semantic),
                         None,
                         Confidence::Exact,
@@ -331,8 +329,8 @@ fn add_condition_contains_edges(
                             "structured control region containment",
                         ),
                         EdgeFact::Contains(sg::Contains {
-                            container_id: condition_id.clone(),
-                            member_id: member_id.clone(),
+                            container_id: *condition_id,
+                            member_id: *member_id,
                         }),
                     ),
                 );
@@ -354,8 +352,8 @@ fn statements_for_callable(
         .nodes(graph, semantic.callable().callable_id)
         .filter_map(|node| match &node.fact {
             NodeFact::Statement(statement) => Some(StatementInfo {
-                statement_id: statement.statement_id.clone(),
-                parent_statement_id: statement.parent_statement_id.clone(),
+                statement_id: statement.statement_id,
+                parent_statement_id: statement.parent_statement_id,
                 kind: statement.kind,
                 ordinal: statement.ordinal,
                 text: text_by_span
@@ -411,7 +409,7 @@ fn expression_id_for_condition(
                 .map(|span| span.end_byte.saturating_sub(span.start_byte))
                 .unwrap_or(usize::MAX)
         })
-        .map(|(_, expression)| expression.expression_id.clone())
+        .map(|(_, expression)| expression.expression_id)
 }
 
 fn branch_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Vec<ControlRegion> {
@@ -427,12 +425,12 @@ fn branch_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Ve
     let branch_ids = descendants
         .iter()
         .filter(|child| else_offset.is_none_or(|offset| child.span.start_byte < offset))
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let else_ids = descendants
         .iter()
         .filter(|child| else_offset.is_some_and(|offset| child.span.start_byte >= offset))
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
 
     let mut regions = vec![region(
@@ -456,7 +454,7 @@ fn loop_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Vec<
     let body_ids = descendants(statement, statements)
         .into_iter()
         .filter(|child| child.statement_id != statement.statement_id)
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     vec![
         region(
@@ -468,7 +466,7 @@ fn loop_regions(statement: &StatementInfo, statements: &[StatementInfo]) -> Vec<
         region(
             ControlRegionKind::LoopContinuation,
             "loop-continuation",
-            vec![statement.statement_id.clone()],
+            vec![statement.statement_id],
             FallthroughBehavior::Conditional,
         ),
     ]
@@ -495,7 +493,7 @@ fn exception_regions(
             catch_offset.is_none_or(|offset| child.span.start_byte < offset)
                 && finally_offset.is_none_or(|offset| child.span.start_byte < offset)
         })
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let catch_ids = descendants
         .iter()
@@ -503,12 +501,12 @@ fn exception_regions(
             catch_offset.is_some_and(|offset| child.span.start_byte >= offset)
                 && finally_offset.is_none_or(|offset| child.span.start_byte < offset)
         })
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
     let finally_ids = descendants
         .iter()
         .filter(|child| finally_offset.is_some_and(|offset| child.span.start_byte >= offset))
-        .map(|child| child.statement_id.clone())
+        .map(|child| child.statement_id)
         .collect::<Vec<_>>();
 
     let mut regions = vec![region(
@@ -574,7 +572,7 @@ fn continuation_for_controller(
     let (continuation_kind, target, description) = if kind == ConditionKind::Loop {
         (
             ContinuationKind::LoopCondition,
-            Some(statement.statement_id.clone()),
+            Some(statement.statement_id),
             "loop body continuation returns to the loop condition",
         )
     } else {
@@ -599,7 +597,7 @@ fn continuation_for_exception(
     let finally_entry = regions
         .iter()
         .find(|region| region.kind == ControlRegionKind::FinallyBody)
-        .and_then(|region| region.entry_statement_id.clone());
+        .and_then(|region| region.entry_statement_id);
     Some(ContinuationPoint {
         kind: if finally_entry.is_some() {
             ContinuationKind::Finally
@@ -618,7 +616,7 @@ fn next_statement_id(statement: &StatementInfo, statements: &[StatementInfo]) ->
         .filter(|candidate| candidate.parent_statement_id == statement.parent_statement_id)
         .filter(|candidate| candidate.span.start_byte > statement.span.start_byte)
         .min_by_key(|candidate| candidate.span.start_byte)
-        .map(|candidate| candidate.statement_id.clone())
+        .map(|candidate| candidate.statement_id)
 }
 
 fn marker_offset(text: &str, start_byte: usize, markers: &[&str]) -> Option<usize> {
@@ -631,7 +629,7 @@ fn marker_offset(text: &str, start_byte: usize, markers: &[&str]) -> Option<usiz
 fn condition_fact<'a>(
     graph: &'a ProgramSupergraph,
     index: &CallableIndex,
-    condition_id: &str,
+    condition_id: NodeId,
 ) -> Option<&'a sg::Condition> {
     // Condition ids are derived from their node id, so the first node with this id is the fact.
     index
@@ -675,7 +673,7 @@ fn parser_evidence(
     vec![Evidence {
         kind: EvidenceKind::Parser,
         summary: summary.to_string(),
-        source_id: Some(semantic.artifact().artifact_id.clone()),
+        source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
@@ -686,13 +684,13 @@ fn parser_evidence(
     }]
 }
 
-fn statement_sort_key(statement: &StatementInfo) -> (usize, usize, StatementKind, usize, String) {
+fn statement_sort_key(statement: &StatementInfo) -> (usize, usize, StatementKind, usize, NodeId) {
     (
         statement.span.start_byte,
         statement.span.end_byte,
         statement.kind,
         statement.ordinal,
-        statement.statement_id.clone(),
+        statement.statement_id,
     )
 }
 
@@ -708,6 +706,7 @@ struct StatementInfo {
 
 #[cfg(test)]
 mod tests {
+    use crate::supergraph::ids::NodeId;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, ConditionAst, ConditionKind as AstConditionKind, ExpressionAst,
@@ -870,7 +869,7 @@ mod tests {
             assert!(
                 graph.edges.iter().any(|edge| {
                     edge.source_id == condition.condition_id
-                        && edge.target_id.as_deref() == Some(member_id.as_str())
+                        && edge.target_id == Some(*member_id)
                 }),
                 "missing structured containment edge to {member_id}"
             );
@@ -903,13 +902,13 @@ mod tests {
             .collect()
     }
 
-    fn expression_id(graph: &ProgramSupergraph, span: SourceSpan) -> String {
+    fn expression_id(graph: &ProgramSupergraph, span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Expression(expression) if node.span == Some(span) => {
-                    Some(expression.expression_id.clone())
+                    Some(expression.expression_id)
                 }
                 _ => None,
             })

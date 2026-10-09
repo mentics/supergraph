@@ -27,16 +27,16 @@ pub struct CallableCfg {
 }
 
 impl CallableCfg {
-    pub fn successors_of(&self, node_id: &str) -> BTreeSet<NodeId> {
-        self.successors.get(node_id).cloned().unwrap_or_default()
+    pub fn successors_of(&self, node_id: NodeId) -> BTreeSet<NodeId> {
+        self.successors.get(&node_id).cloned().unwrap_or_default()
     }
 
-    pub fn predecessors_of(&self, node_id: &str) -> BTreeSet<NodeId> {
-        self.predecessors.get(node_id).cloned().unwrap_or_default()
+    pub fn predecessors_of(&self, node_id: NodeId) -> BTreeSet<NodeId> {
+        self.predecessors.get(&node_id).cloned().unwrap_or_default()
     }
 
-    pub fn is_reachable(&self, node_id: &str) -> bool {
-        self.reachable_node_ids.contains(node_id)
+    pub fn is_reachable(&self, node_id: NodeId) -> bool {
+        self.reachable_node_ids.contains(&node_id)
     }
 }
 
@@ -49,20 +49,20 @@ pub struct DominatorSets {
 }
 
 impl DominatorSets {
-    pub fn dominators_of(&self, node_id: &str) -> Option<&BTreeSet<NodeId>> {
-        self.dominators.get(node_id)
+    pub fn dominators_of(&self, node_id: NodeId) -> Option<&BTreeSet<NodeId>> {
+        self.dominators.get(&node_id)
     }
 
-    pub fn immediate_dominator_of(&self, node_id: &str) -> Option<&NodeId> {
+    pub fn immediate_dominator_of(&self, node_id: NodeId) -> Option<&NodeId> {
         self.immediate_dominators
-            .get(node_id)
+            .get(&node_id)
             .and_then(Option::as_ref)
     }
 
-    pub fn dominates(&self, dominator_id: &str, node_id: &str) -> bool {
+    pub fn dominates(&self, dominator_id: NodeId, node_id: NodeId) -> bool {
         self.dominators
-            .get(node_id)
-            .is_some_and(|dominators| dominators.contains(dominator_id))
+            .get(&node_id)
+            .is_some_and(|dominators| dominators.contains(&dominator_id))
     }
 }
 
@@ -74,18 +74,18 @@ pub struct CallableDominance {
 }
 
 impl CallableDominance {
-    pub fn dominates(&self, dominator_id: &str, node_id: &str) -> bool {
+    pub fn dominates(&self, dominator_id: NodeId, node_id: NodeId) -> bool {
         self.dominators.dominates(dominator_id, node_id)
     }
 
-    pub fn post_dominates(&self, post_dominator_id: &str, node_id: &str) -> bool {
+    pub fn post_dominates(&self, post_dominator_id: NodeId, node_id: NodeId) -> bool {
         self.post_dominators.dominates(post_dominator_id, node_id)
     }
 }
 
 pub fn analyze_callable_dominance(
     graph: &ProgramSupergraph,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Option<CallableDominance> {
     dominance_for_cfg(callable_cfg(graph, callable_id)?)
 }
@@ -93,7 +93,7 @@ pub fn analyze_callable_dominance(
 pub(crate) fn analyze_callable_dominance_indexed(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Option<CallableDominance> {
     dominance_for_cfg(callable_cfg_indexed(graph, index, callable_id)?)
 }
@@ -101,7 +101,7 @@ pub(crate) fn analyze_callable_dominance_indexed(
 fn dominance_for_cfg(cfg: CallableCfg) -> Option<CallableDominance> {
     let dominators = compute_dominators(
         cfg.reachable_node_ids.clone(),
-        BTreeSet::from([cfg.entry_node_id.clone()]),
+        BTreeSet::from([cfg.entry_node_id]),
         &cfg.predecessors,
     );
 
@@ -136,7 +136,7 @@ fn dominance_for_cfg(cfg: CallableCfg) -> Option<CallableDominance> {
     })
 }
 
-pub fn callable_cfg(graph: &ProgramSupergraph, callable_id: &str) -> Option<CallableCfg> {
+pub fn callable_cfg(graph: &ProgramSupergraph, callable_id: NodeId) -> Option<CallableCfg> {
     callable_cfg_from(
         callable_id,
         indexed_control_flow_nodes(graph).into_iter(),
@@ -147,7 +147,7 @@ pub fn callable_cfg(graph: &ProgramSupergraph, callable_id: &str) -> Option<Call
 pub(crate) fn callable_cfg_indexed(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Option<CallableCfg> {
     callable_cfg_from(
         callable_id,
@@ -157,7 +157,7 @@ pub(crate) fn callable_cfg_indexed(
 }
 
 fn callable_cfg_from<'g>(
-    callable_id: &str,
+    callable_id: NodeId,
     nodes: impl Iterator<Item = &'g GraphNode>,
     edges: impl Iterator<Item = &'g sg::GraphEdge>,
 ) -> Option<CallableCfg> {
@@ -174,15 +174,15 @@ fn callable_cfg_from<'g>(
         if control.callable_id != callable_id {
             continue;
         }
-        node_ids.insert(control.cfg_node_id.clone());
+        node_ids.insert(control.cfg_node_id);
         match control.role {
-            ControlFlowNodeRole::Entry => entry_node_id = Some(control.cfg_node_id.clone()),
+            ControlFlowNodeRole::Entry => entry_node_id = Some(control.cfg_node_id),
             ControlFlowNodeRole::Exit => {
-                exit_node_ids.insert(control.cfg_node_id.clone());
+                exit_node_ids.insert(control.cfg_node_id);
                 match control.semantic_kind.as_deref() {
-                    Some("NormalExit") => normal_exit_node_id = Some(control.cfg_node_id.clone()),
+                    Some("NormalExit") => normal_exit_node_id = Some(control.cfg_node_id),
                     Some("ExceptionalExit") => {
-                        exceptional_exit_node_id = Some(control.cfg_node_id.clone())
+                        exceptional_exit_node_id = Some(control.cfg_node_id)
                     }
                     _ => {}
                 }
@@ -198,7 +198,7 @@ fn callable_cfg_from<'g>(
     let entry_node_id = entry_node_id?;
     let mut successors = node_ids
         .iter()
-        .map(|node_id| (node_id.clone(), BTreeSet::new()))
+        .map(|node_id| (*node_id, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
     let mut predecessors = successors.clone();
 
@@ -209,26 +209,26 @@ fn callable_cfg_from<'g>(
         if flow.callable_id != callable_id {
             continue;
         }
-        let Some(target_id) = &edge.target_id else {
+        let Some(target_id) = edge.target_id else {
             continue;
         };
-        if !node_ids.contains(&edge.source_id) || !node_ids.contains(target_id) {
+        if !node_ids.contains(&edge.source_id) || !node_ids.contains(&target_id) {
             continue;
         }
         successors
-            .entry(edge.source_id.clone())
+            .entry(edge.source_id)
             .or_default()
-            .insert(target_id.clone());
+            .insert(target_id);
         predecessors
-            .entry(target_id.clone())
+            .entry(target_id)
             .or_default()
-            .insert(edge.source_id.clone());
+            .insert(edge.source_id);
     }
 
-    let reachable_node_ids = reachable_from(&BTreeSet::from([entry_node_id.clone()]), &successors);
+    let reachable_node_ids = reachable_from(&BTreeSet::from([entry_node_id]), &successors);
 
     Some(CallableCfg {
-        callable_id: callable_id.to_string(),
+        callable_id,
         node_ids,
         reachable_node_ids,
         entry_node_id,
@@ -252,25 +252,25 @@ fn compute_dominators(
 
     // Dense indices follow the sorted order of `node_ids`, so ascending bit order matches
     // the iteration order of the `BTreeSet`s that are materialized at the end.
-    let ordered = node_ids.iter().collect::<Vec<_>>();
+    let ordered = node_ids.iter().copied().collect::<Vec<_>>();
     let position = ordered
         .iter()
         .enumerate()
-        .map(|(index, node_id)| (node_id.as_str(), index))
+        .map(|(index, node_id)| (node_id, index))
         .collect::<BTreeMap<_, _>>();
     let words = ordered.len().div_ceil(64);
     let is_root = ordered
         .iter()
-        .map(|node_id| root_ids.contains(*node_id))
+        .map(|node_id| root_ids.contains(node_id))
         .collect::<Vec<_>>();
     let predecessors = ordered
         .iter()
         .map(|node_id| {
             incoming
-                .get(*node_id)
+                .get(node_id)
                 .into_iter()
                 .flatten()
-                .filter_map(|predecessor| position.get(predecessor.as_str()).copied())
+                .filter_map(|predecessor| position.get(predecessor).copied())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -317,7 +317,7 @@ fn compute_dominators(
         .enumerate()
         .map(|(index, node_id)| {
             if is_root[index] {
-                return ((*node_id).clone(), None);
+                return ((*node_id), None);
             }
             let mut strict = sets[index].clone();
             strict[index / 64] &= !(1 << (index % 64));
@@ -329,7 +329,7 @@ fn compute_dominators(
                     .zip(&sets[*candidate])
                     .all(|(other, dominators)| other & !dominators == 0)
             });
-            ((*node_id).clone(), idom.map(|candidate| ordered[candidate].clone()))
+            ((*node_id), idom.map(|candidate| ordered[candidate].clone()))
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -338,7 +338,7 @@ fn compute_dominators(
         .enumerate()
         .map(|(index, node_id)| {
             (
-                (*node_id).clone(),
+                (*node_id),
                 bits(&sets[index])
                     .map(|member| ordered[member].clone())
                     .collect::<BTreeSet<_>>(),
@@ -383,7 +383,7 @@ fn reachable_from(
     let mut reachable = BTreeSet::new();
     let mut pending = roots.iter().cloned().collect::<Vec<_>>();
     while let Some(node_id) = pending.pop() {
-        if !reachable.insert(node_id.clone()) {
+        if !reachable.insert(node_id) {
             continue;
         }
         if let Some(next) = successors.get(&node_id) {
@@ -458,22 +458,22 @@ fn emit_callable(
     _context: &SemanticContext<'_>,
     semantic: &SemanticCallable<'_>,
 ) {
-    let Some(analysis) = analyze_callable_dominance_indexed(graph, index, &semantic.callable().callable_id)
+    let Some(analysis) = analyze_callable_dominance_indexed(graph, index, semantic.callable().callable_id)
     else {
         return;
     };
 
     let mut controls = BTreeSet::<(NodeId, NodeId, Option<SourceSpan>)>::new();
     for condition_id in branch_condition_ids(graph, index, &analysis) {
-        for cfg_node_id in controlled_cfg_node_ids(&analysis, &condition_id) {
-            for target in controlled_targets_for_cfg_node(graph, index, semantic, &cfg_node_id) {
-                controls.insert((condition_id.clone(), target.target_id, target.span));
+        for cfg_node_id in controlled_cfg_node_ids(&analysis, condition_id) {
+            for target in controlled_targets_for_cfg_node(graph, index, semantic, cfg_node_id) {
+                controls.insert((condition_id, target.target_id, target.span));
             }
         }
     }
 
     for (condition_id, controlled_id, span) in controls {
-        add_controls_edge(graph, semantic, &condition_id, &controlled_id, span);
+        add_controls_edge(graph, semantic, condition_id, controlled_id, span);
     }
 }
 
@@ -493,38 +493,38 @@ fn branch_condition_ids(
         .filter_map(|node| match &node.fact {
             NodeFact::ControlFlow(control)
                 if control.role == ControlFlowNodeRole::Condition
-                    && analysis.cfg.is_reachable(&control.cfg_node_id)
-                    && analysis.cfg.successors_of(&control.cfg_node_id).len() >= 2 =>
+                    && analysis.cfg.is_reachable(control.cfg_node_id)
+                    && analysis.cfg.successors_of(control.cfg_node_id).len() >= 2 =>
             {
-                Some(control.cfg_node_id.clone())
+                Some(control.cfg_node_id)
             }
             _ => None,
         })
         .collect()
 }
 
-fn controlled_cfg_node_ids(analysis: &CallableDominance, condition_id: &str) -> BTreeSet<NodeId> {
+fn controlled_cfg_node_ids(analysis: &CallableDominance, condition_id: NodeId) -> BTreeSet<NodeId> {
     let mut controlled = BTreeSet::new();
     for successor_id in analysis.cfg.successors_of(condition_id) {
-        if !analysis.cfg.is_reachable(&successor_id) {
+        if !analysis.cfg.is_reachable(successor_id) {
             continue;
         }
-        if analysis.post_dominates(&successor_id, condition_id) {
+        if analysis.post_dominates(successor_id, condition_id) {
             continue;
         }
         for candidate_id in analysis
             .post_dominators
-            .dominators_of(&successor_id)
+            .dominators_of(successor_id)
             .into_iter()
             .flatten()
         {
-            if candidate_id == condition_id {
+            if *candidate_id == condition_id {
                 continue;
             }
-            if analysis.post_dominates(candidate_id, condition_id) {
+            if analysis.post_dominates(*candidate_id, condition_id) {
                 continue;
             }
-            controlled.insert(candidate_id.clone());
+            controlled.insert(*candidate_id);
         }
     }
     controlled
@@ -534,7 +534,7 @@ fn controlled_targets_for_cfg_node(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
     semantic: &SemanticCallable<'_>,
-    cfg_node_id: &str,
+    cfg_node_id: NodeId,
 ) -> Vec<ControlledTarget> {
     let Some((cfg_node, control)) = cfg_control_node(graph, index, cfg_node_id) else {
         return Vec::new();
@@ -544,7 +544,7 @@ fn controlled_targets_for_cfg_node(
         | ControlFlowNodeRole::Return
         | ControlFlowNodeRole::Raise => {
             vec![ControlledTarget {
-                target_id: control.cfg_node_id.clone(),
+                target_id: control.cfg_node_id,
                 span: cfg_node.span,
             }]
         }
@@ -556,14 +556,14 @@ fn controlled_targets_for_cfg_node(
             targets.extend(statement_targets_for_cfg_statement(
                 graph,
                 index,
-                &semantic.callable().callable_id,
+                semantic.callable().callable_id,
                 cfg_node_id,
                 statement_span,
             ));
             targets.extend(direct_fact_targets_for_cfg_statement(
                 graph,
                 index,
-                &semantic.callable().callable_id,
+                semantic.callable().callable_id,
                 cfg_node_id,
                 statement_span,
             ));
@@ -578,8 +578,8 @@ fn controlled_targets_for_cfg_node(
 fn statement_targets_for_cfg_statement(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    cfg_node_id: &str,
+    callable_id: NodeId,
+    cfg_node_id: NodeId,
     statement_span: SourceSpan,
 ) -> Vec<ControlledTarget> {
     index
@@ -588,11 +588,11 @@ fn statement_targets_for_cfg_statement(
             NodeFact::Statement(statement)
                 if node.span == Some(statement_span)
                     && nearest_statement_cfg_node_for_span(graph, index, callable_id, statement_span)
-                        .as_deref()
+                        
                         == Some(cfg_node_id) =>
             {
                 Some(ControlledTarget {
-                    target_id: statement.statement_id.clone(),
+                    target_id: statement.statement_id,
                     span: node.span,
                 })
             }
@@ -604,8 +604,8 @@ fn statement_targets_for_cfg_statement(
 fn direct_fact_targets_for_cfg_statement(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
-    cfg_node_id: &str,
+    callable_id: NodeId,
+    cfg_node_id: NodeId,
     statement_span: SourceSpan,
 ) -> Vec<ControlledTarget> {
     index
@@ -613,7 +613,7 @@ fn direct_fact_targets_for_cfg_statement(
         .filter_map(|node| {
             let span = node.span?;
             if !span_contains(statement_span, span)
-                || nearest_statement_cfg_node_for_span(graph, index, callable_id, span).as_deref()
+                || nearest_statement_cfg_node_for_span(graph, index, callable_id, span)
                     != Some(cfg_node_id)
             {
                 return None;
@@ -621,13 +621,13 @@ fn direct_fact_targets_for_cfg_statement(
             match &node.fact {
                 NodeFact::CallSite(call_site) if call_site.enclosing_callable_id == callable_id => {
                     Some(ControlledTarget {
-                        target_id: call_site.call_site_id.clone(),
+                        target_id: call_site.call_site_id,
                         span: node.span,
                     })
                 }
                 NodeFact::Definition(definition) if definition.callable_id == callable_id => {
                     Some(ControlledTarget {
-                        target_id: definition.definition_id.clone(),
+                        target_id: definition.definition_id,
                         span: node.span,
                     })
                 }
@@ -636,13 +636,13 @@ fn direct_fact_targets_for_cfg_statement(
                         && data_flow.role == DataFlowNodeRole::Definition =>
                 {
                     Some(ControlledTarget {
-                        target_id: data_flow.data_flow_node_id.clone(),
+                        target_id: data_flow.data_flow_node_id,
                         span: node.span,
                     })
                 }
                 NodeFact::Expression(expression) if expression.callable_id == callable_id => {
                     Some(ControlledTarget {
-                        target_id: expression.expression_id.clone(),
+                        target_id: expression.expression_id,
                         span: node.span,
                     })
                 }
@@ -655,7 +655,7 @@ fn direct_fact_targets_for_cfg_statement(
 fn nearest_statement_cfg_node_for_span(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     span: SourceSpan,
 ) -> Option<NodeId> {
     index
@@ -669,7 +669,7 @@ fn nearest_statement_cfg_node_for_span(
             {
                 let statement_span = node.span?;
                 Some((
-                    control.cfg_node_id.clone(),
+                    control.cfg_node_id,
                     statement_span
                         .end_byte
                         .saturating_sub(statement_span.start_byte),
@@ -686,7 +686,7 @@ fn nearest_statement_cfg_node_for_span(
 fn cfg_control_node<'a>(
     graph: &'a ProgramSupergraph,
     index: &CallableIndex,
-    cfg_node_id: &str,
+    cfg_node_id: NodeId,
 ) -> Option<(&'a GraphNode, &'a sg::ControlFlowNode)> {
     index
         .control_flow_node(graph, cfg_node_id)
@@ -699,8 +699,8 @@ fn cfg_control_node<'a>(
 fn add_controls_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    condition_id: &str,
-    controlled_id: &str,
+    condition_id: NodeId,
+    controlled_id: NodeId,
     span: Option<SourceSpan>,
 ) {
     insert_edge(
@@ -708,8 +708,8 @@ fn add_controls_edge(
         graph_edge(
             edge_id("controls", condition_id, controlled_id, PRECISION),
             EdgeKind::Controls,
-            condition_id.to_string(),
-            controlled_id.to_string(),
+            condition_id,
+            controlled_id,
             node_owner(semantic),
             span,
             Confidence::Exact,
@@ -717,9 +717,9 @@ fn add_controls_edge(
                 "control dependence derived from CFG branch successor post-dominance",
             ),
             EdgeFact::Controls(sg::Controls {
-                callable_id: semantic.callable().callable_id.clone(),
-                condition_id: condition_id.to_string(),
-                controlled_id: controlled_id.to_string(),
+                callable_id: semantic.callable().callable_id,
+                condition_id,
+                controlled_id,
                 precision: PRECISION.to_string(),
             }),
         ),
@@ -744,8 +744,13 @@ mod tests {
     };
 
     use super::{PRECISION, analyze_callable_dominance};
+    use crate::supergraph::ids::{callable_id_from_text, test_support::{test_edge_id, test_id}};
 
     const CALLABLE_ID: &str = "sample:<module>";
+
+    fn callable_id() -> NodeId {
+        callable_id_from_text(CALLABLE_ID)
+    }
 
     #[test]
     fn sg060_computes_dominators_for_branches_loops_and_merges() {
@@ -778,30 +783,30 @@ mod tests {
             ],
         );
 
-        let analysis = analyze_callable_dominance(&graph, CALLABLE_ID).expect("dominance");
+        let analysis = analyze_callable_dominance(&graph, callable_id()).expect("dominance");
 
-        assert!(analysis.dominates("entry", "body"));
-        assert!(analysis.dominates("if", "merge"));
-        assert!(analysis.dominates("merge", "loop"));
-        assert!(analysis.dominates("loop", "body"));
-        assert!(!analysis.dominates("then", "merge"));
+        assert!(analysis.dominates(test_id("entry"), test_id("body")));
+        assert!(analysis.dominates(test_id("if"), test_id("merge")));
+        assert!(analysis.dominates(test_id("merge"), test_id("loop")));
+        assert!(analysis.dominates(test_id("loop"), test_id("body")));
+        assert!(!analysis.dominates(test_id("then"), test_id("merge")));
         assert_eq!(
-            analysis.dominators.immediate_dominator_of("merge"),
-            Some(&"if".to_string())
+            analysis.dominators.immediate_dominator_of(test_id("merge")),
+            Some(&test_id("if"))
         );
         assert_eq!(
-            analysis.dominators.immediate_dominator_of("body"),
-            Some(&"loop".to_string())
+            analysis.dominators.immediate_dominator_of(test_id("body")),
+            Some(&test_id("loop"))
         );
 
-        assert!(analysis.post_dominates("merge", "then"));
-        assert!(analysis.post_dominates("merge", "else"));
-        assert!(analysis.post_dominates("loop", "merge"));
-        assert!(analysis.post_dominates("loop", "body"));
-        assert!(analysis.post_dominates("normal-exit", "loop"));
+        assert!(analysis.post_dominates(test_id("merge"), test_id("then")));
+        assert!(analysis.post_dominates(test_id("merge"), test_id("else")));
+        assert!(analysis.post_dominates(test_id("loop"), test_id("merge")));
+        assert!(analysis.post_dominates(test_id("loop"), test_id("body")));
+        assert!(analysis.post_dominates(test_id("normal-exit"), test_id("loop")));
         assert_eq!(
-            analysis.post_dominators.immediate_dominator_of("then"),
-            Some(&"merge".to_string())
+            analysis.post_dominators.immediate_dominator_of(test_id("then")),
+            Some(&test_id("merge"))
         );
     }
 
@@ -829,15 +834,15 @@ mod tests {
             ],
         );
 
-        let analysis = analyze_callable_dominance(&graph, CALLABLE_ID).expect("dominance");
+        let analysis = analyze_callable_dominance(&graph, callable_id()).expect("dominance");
 
-        assert!(analysis.post_dominates("normal-exit", "return"));
-        assert!(analysis.post_dominates("exceptional-exit", "raise"));
-        assert!(!analysis.post_dominates("normal-exit", "condition"));
-        assert!(!analysis.post_dominates("exceptional-exit", "condition"));
+        assert!(analysis.post_dominates(test_id("normal-exit"), test_id("return")));
+        assert!(analysis.post_dominates(test_id("exceptional-exit"), test_id("raise")));
+        assert!(!analysis.post_dominates(test_id("normal-exit"), test_id("condition")));
+        assert!(!analysis.post_dominates(test_id("exceptional-exit"), test_id("condition")));
         assert_eq!(
-            analysis.post_dominators.dominators_of("condition"),
-            Some(&BTreeSet::from(["condition".to_string()]))
+            analysis.post_dominators.dominators_of(test_id("condition")),
+            Some(&BTreeSet::from([test_id("condition")]))
         );
     }
 
@@ -868,12 +873,12 @@ mod tests {
             ],
         );
 
-        let analysis = analyze_callable_dominance(&graph, CALLABLE_ID).expect("dominance");
+        let analysis = analyze_callable_dominance(&graph, callable_id()).expect("dominance");
 
-        assert!(analysis.post_dominates("catch", "raise"));
-        assert!(analysis.post_dominates("handled", "catch"));
-        assert!(analysis.post_dominates("normal-exit", "raise"));
-        assert!(!analysis.post_dominates("exceptional-exit", "raise"));
+        assert!(analysis.post_dominates(test_id("catch"), test_id("raise")));
+        assert!(analysis.post_dominates(test_id("handled"), test_id("catch")));
+        assert!(analysis.post_dominates(test_id("normal-exit"), test_id("raise")));
+        assert!(!analysis.post_dominates(test_id("exceptional-exit"), test_id("raise")));
     }
 
     #[test]
@@ -897,14 +902,14 @@ mod tests {
             ],
         );
 
-        let analysis = analyze_callable_dominance(&graph, CALLABLE_ID).expect("dominance");
+        let analysis = analyze_callable_dominance(&graph, callable_id()).expect("dominance");
 
-        assert!(analysis.cfg.node_ids.contains("dead"));
-        assert!(!analysis.cfg.is_reachable("dead"));
-        assert!(!analysis.dominators.node_ids.contains("dead"));
-        assert!(!analysis.post_dominators.node_ids.contains("dead"));
-        assert!(!analysis.dominates("dead", "normal-exit"));
-        assert!(!analysis.post_dominates("normal-exit", "dead"));
+        assert!(analysis.cfg.node_ids.contains(&test_id("dead")));
+        assert!(!analysis.cfg.is_reachable(test_id("dead")));
+        assert!(!analysis.dominators.node_ids.contains(&test_id("dead")));
+        assert!(!analysis.post_dominators.node_ids.contains(&test_id("dead")));
+        assert!(!analysis.dominates(test_id("dead"), test_id("normal-exit")));
+        assert!(!analysis.post_dominates(test_id("normal-exit"), test_id("dead")));
     }
 
     #[test]
@@ -945,29 +950,29 @@ mod tests {
         let after_if = call_site_at(graph, span(95, 105));
         let if_merge = cfg_merge_at(graph, span(10, 90), "BranchMerge");
 
-        assert_control(&controls, &flag, &success);
-        assert_control(&controls, &flag, &recover);
-        assert_control(&controls, &flag, &value_definition);
-        assert_no_control(&controls, &flag, &after_if);
-        assert_no_control(&controls, &flag, &if_merge);
+        assert_control(&controls, flag, success);
+        assert_control(&controls, flag, recover);
+        assert_control(&controls, flag, value_definition);
+        assert_no_control(&controls, flag, after_if);
+        assert_no_control(&controls, flag, if_merge);
 
         let keep = cfg_condition_at(graph, span(116, 120));
         let tick = call_site_at(graph, span(125, 131));
         let after_loop = call_site_at(graph, span(185, 197));
-        assert_control(&controls, &keep, &tick);
-        assert_no_control(&controls, &keep, &after_loop);
+        assert_control(&controls, keep, tick);
+        assert_no_control(&controls, keep, after_loop);
 
         let done = cfg_condition_at(graph, span(203, 207));
         let return_cfg = cfg_return_at(graph, span(215, 227));
-        assert_control(&controls, &done, &return_cfg);
+        assert_control(&controls, done, return_cfg);
 
         let fatal = cfg_condition_at(graph, span(263, 268));
         let raise_cfg = cfg_raise_at(graph, span(275, 286));
-        assert_control(&controls, &fatal, &raise_cfg);
+        assert_control(&controls, fatal, raise_cfg);
 
         let nested_stop = cfg_condition_at(graph, span(143, 147));
         let break_statement = statement_fact_with_label(graph, "break");
-        assert_control(&controls, &nested_stop, &break_statement);
+        assert_control(&controls, nested_stop, break_statement);
 
         assert!(
             graph.edges.iter().all(|edge| match &edge.fact {
@@ -980,7 +985,7 @@ mod tests {
             graph.edges.iter().any(|edge| matches!(
                 &edge.fact,
                 EdgeFact::Controls(controls)
-                    if controls.callable_id == CALLABLE_ID
+                    if controls.callable_id == callable_id()
                         && edge.confidence == Confidence::Exact
                         && edge.uncertainty == Uncertainty::Exact
             )),
@@ -993,7 +998,7 @@ mod tests {
             "if (flag) {\n  success();\n  value = 1;\n} else {\n  recover();\n}"
         };
         let branch_statement = statement_fact_with_label(graph, branch_statement);
-        assert_no_control(&controls, &flag, &branch_statement);
+        assert_no_control(&controls, flag, branch_statement);
     }
 
     fn assert_sg122_control_dependence_semantics(graph: &ProgramSupergraph, python: bool) {
@@ -1017,53 +1022,53 @@ mod tests {
         let if_merge = cfg_merge_at(graph, span(10, 90), "BranchMerge");
         let after_if = call_site_at(graph, span(95, 105));
 
-        assert_control(&controls, &flag, &success_statement);
-        assert_control(&controls, &flag, &success_call);
-        assert_control(&controls, &flag, &value_expression);
-        assert_control(&controls, &flag, &value_definition);
-        assert_control(&controls, &flag, &value_data_flow_definition);
-        assert_control(&controls, &flag, &recover_call);
-        assert_no_control(&controls, &flag, &branch_statement);
-        assert_no_control(&controls, &flag, &if_merge);
-        assert_no_control(&controls, &flag, &after_if);
+        assert_control(&controls, flag, success_statement);
+        assert_control(&controls, flag, success_call);
+        assert_control(&controls, flag, value_expression);
+        assert_control(&controls, flag, value_definition);
+        assert_control(&controls, flag, value_data_flow_definition);
+        assert_control(&controls, flag, recover_call);
+        assert_no_control(&controls, flag, branch_statement);
+        assert_no_control(&controls, flag, if_merge);
+        assert_no_control(&controls, flag, after_if);
 
         let keep = cfg_condition_at(graph, span(116, 120));
         let tick_call = call_site_at(graph, span(125, 131));
         let nested_stop = cfg_condition_at(graph, span(143, 147));
         let after_loop = call_site_at(graph, span(185, 197));
-        assert_control(&controls, &keep, &tick_call);
-        assert_control(&controls, &keep, &nested_stop);
-        assert_no_control(&controls, &keep, &after_loop);
+        assert_control(&controls, keep, tick_call);
+        assert_control(&controls, keep, nested_stop);
+        assert_no_control(&controls, keep, after_loop);
 
         let break_statement = statement_fact_with_label(graph, "break");
         let continue_statement = statement_fact_with_label(graph, "continue");
-        assert_control(&controls, &nested_stop, &break_statement);
-        assert_control(&controls, &nested_stop, &continue_statement);
+        assert_control(&controls, nested_stop, break_statement);
+        assert_control(&controls, nested_stop, continue_statement);
 
         let done = cfg_condition_at(graph, span(203, 207));
         let return_cfg = cfg_return_at(graph, span(215, 227));
         let after_done = call_site_at(graph, span(245, 257));
-        assert_control(&controls, &done, &return_cfg);
-        assert_control(&controls, &done, &after_done);
+        assert_control(&controls, done, return_cfg);
+        assert_control(&controls, done, after_done);
 
         let fatal = cfg_condition_at(graph, span(263, 268));
         let raise_cfg = cfg_raise_at(graph, span(275, 286));
         let after_fatal = call_site_at(graph, span(310, 323));
-        assert_control(&controls, &fatal, &raise_cfg);
-        assert_control(&controls, &fatal, &after_fatal);
+        assert_control(&controls, fatal, raise_cfg);
+        assert_control(&controls, fatal, after_fatal);
 
         let pdg = graph.program_dependence_view();
-        let call_slice = pdg.call_backward_slice(&success_call);
+        let call_slice = pdg.call_backward_slice(success_call);
         assert!(
             call_slice.control_condition_ids.contains(&flag),
             "call-site backward slice should include its controlling condition"
         );
-        let definition_slice = pdg.write_backward_slice(&value_definition);
+        let definition_slice = pdg.write_backward_slice(value_definition);
         assert!(
             definition_slice.control_condition_ids.contains(&flag),
             "definition backward slice should include its controlling condition"
         );
-        let after_if_slice = pdg.call_backward_slice(&after_if);
+        let after_if_slice = pdg.call_backward_slice(after_if);
         assert!(
             !after_if_slice.control_condition_ids.contains(&flag),
             "post-merge behavior should not inherit the branch condition"
@@ -1081,10 +1086,10 @@ mod tests {
     fn pdg_control_edges(graph: &ProgramSupergraph) -> BTreeSet<(NodeId, NodeId)> {
         let pdg = graph.program_dependence_view();
         let filter =
-            ProgramDependenceGraphFilter::all_callables().with_callable(CALLABLE_ID.to_string());
+            ProgramDependenceGraphFilter::all_callables().with_callable(callable_id());
         pdg.edges(&filter)
             .filter_map(|edge| match &edge.fact {
-                EdgeFact::Controls(_) => Some((edge.source_id.clone(), edge.target_id.clone()?)),
+                EdgeFact::Controls(_) => Some((edge.source_id, edge.target_id?)),
                 _ => None,
             })
             .collect()
@@ -1095,22 +1100,22 @@ mod tests {
             .edges
             .iter()
             .filter_map(|edge| match &edge.fact {
-                EdgeFact::Controls(_) => Some((edge.source_id.clone(), edge.target_id.clone()?)),
+                EdgeFact::Controls(_) => Some((edge.source_id, edge.target_id?)),
                 _ => None,
             })
             .collect()
     }
 
-    fn assert_control(edges: &BTreeSet<(NodeId, NodeId)>, condition_id: &str, target_id: &str) {
+    fn assert_control(edges: &BTreeSet<(NodeId, NodeId)>, condition_id: NodeId, target_id: NodeId) {
         assert!(
-            edges.contains(&(condition_id.to_string(), target_id.to_string())),
+            edges.contains(&(condition_id, target_id)),
             "missing Controls edge {condition_id} -> {target_id}"
         );
     }
 
-    fn assert_no_control(edges: &BTreeSet<(NodeId, NodeId)>, condition_id: &str, target_id: &str) {
+    fn assert_no_control(edges: &BTreeSet<(NodeId, NodeId)>, condition_id: NodeId, target_id: NodeId) {
         assert!(
-            !edges.contains(&(condition_id.to_string(), target_id.to_string())),
+            !edges.contains(&(condition_id, target_id)),
             "unexpected Controls edge {condition_id} -> {target_id}"
         );
     }
@@ -1139,7 +1144,7 @@ mod tests {
                 NodeFact::ControlFlow(control)
                     if node.span == Some(span) && control.role == role =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
@@ -1156,7 +1161,7 @@ mod tests {
                         && control.role == ControlFlowNodeRole::Merge
                         && control.semantic_kind.as_deref() == Some(semantic_kind) =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
@@ -1169,7 +1174,7 @@ mod tests {
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::CallSite(call_site) if node.span == Some(span) => {
-                    Some(call_site.call_site_id.clone())
+                    Some(call_site.call_site_id)
                 }
                 _ => None,
             })
@@ -1185,7 +1190,7 @@ mod tests {
                     if node.span == Some(span)
                         && data_flow.role == sg::DataFlowNodeRole::Definition =>
                 {
-                    Some(data_flow.data_flow_node_id.clone())
+                    Some(data_flow.data_flow_node_id)
                 }
                 _ => None,
             })
@@ -1198,7 +1203,7 @@ mod tests {
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Definition(definition) if node.span == Some(span) => {
-                    Some(definition.definition_id.clone())
+                    Some(definition.definition_id)
                 }
                 _ => None,
             })
@@ -1211,7 +1216,7 @@ mod tests {
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Expression(expression) if node.span == Some(span) => {
-                    Some(expression.expression_id.clone())
+                    Some(expression.expression_id)
                 }
                 _ => None,
             })
@@ -1236,10 +1241,10 @@ mod tests {
             .iter()
             .find_map(|node| match &node.fact {
                 NodeFact::Statement(statement)
-                    if statement.callable_id == CALLABLE_ID
+                    if statement.callable_id == callable_id()
                         && node.span == Some(statement_span) =>
                 {
-                    Some(statement.statement_id.clone())
+                    Some(statement.statement_id)
                 }
                 _ => None,
             })
@@ -1451,9 +1456,9 @@ mod tests {
         semantic_kind: Option<&str>,
     ) -> GraphNode {
         GraphNode {
-            node_id: node_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: test_id(node_id),
+            fact_id: None,
+            payload_hash: None,
             kind: NodeKind::ControlFlow,
             owner: owner(),
             span: None,
@@ -1461,8 +1466,8 @@ mod tests {
             uncertainty: Uncertainty::Exact,
             evidence: Vec::new(),
             fact: NodeFact::ControlFlow(sg::ControlFlowNode {
-                cfg_node_id: node_id.to_string(),
-                callable_id: CALLABLE_ID.to_string(),
+                cfg_node_id: test_id(node_id),
+                callable_id: callable_id(),
                 role,
                 label: node_id.to_string(),
                 semantic_kind: semantic_kind.map(str::to_string),
@@ -1472,12 +1477,12 @@ mod tests {
 
     fn cfg_edge(source: &str, target: &str, flow_kind: ControlFlowKind) -> GraphEdge {
         GraphEdge {
-            edge_id: format!("{source}->{target}"),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: test_edge_id(&format!("{source}->{target}")),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::ControlFlow,
-            source_id: source.to_string(),
-            target_id: Some(target.to_string()),
+            source_id: test_id(source),
+            target_id: Some(test_id(target)),
             owner: owner(),
             span: None,
             confidence: Confidence::Exact,
@@ -1491,7 +1496,7 @@ mod tests {
                 syntax: None,
             }],
             fact: EdgeFact::ControlFlow(sg::ControlFlow {
-                callable_id: CALLABLE_ID.to_string(),
+                callable_id: callable_id(),
                 flow_kind,
                 outcome: ControlFlowOutcome::Unknown,
                 branch_arm: None,
@@ -1502,9 +1507,9 @@ mod tests {
 
     fn owner() -> SourceOwnership {
         SourceOwnership {
-            artifact_id: Some("sample.py".to_string()),
+            artifact_id: Some(test_id("sample.py")),
             scope_id: None,
-            callable_id: Some(CALLABLE_ID.to_string()),
+            callable_id: Some(callable_id()),
         }
     }
 }

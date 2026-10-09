@@ -6,6 +6,8 @@ use crate::supergraph::{
     ControlRegionKind, DiagnosticKind, EdgeFact, EdgeKind, ExpressionKind, FallthroughBehavior,
     NodeFact, NodeId, NodeKind, ProgramSupergraph, Severity, StatementKind, stable_id,
 };
+use crate::id_parts;
+use crate::supergraph::ids::{IdPart, Tag};
 
 use super::{
     SemanticCallable, SemanticContext, callable_index::CallableIndex, edge_id, graph_edge,
@@ -22,23 +24,23 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph, context: &SemanticContext<'_>)
     }
 }
 
-pub(crate) fn entry_node_id(callable_id: &str) -> NodeId {
-    stable_id("cfg-node", &[callable_id, "entry"])
+pub(crate) fn entry_node_id(callable_id: NodeId) -> NodeId {
+    stable_id(Tag::CfgNode, id_parts![callable_id, "entry"])
 }
 
-pub(crate) fn exit_node_id(callable_id: &str) -> NodeId {
+pub(crate) fn exit_node_id(callable_id: NodeId) -> NodeId {
     normal_exit_node_id(callable_id)
 }
 
-pub(crate) fn normal_exit_node_id(callable_id: &str) -> NodeId {
-    stable_id("cfg-node", &[callable_id, "normal-exit"])
+pub(crate) fn normal_exit_node_id(callable_id: NodeId) -> NodeId {
+    stable_id(Tag::CfgNode, id_parts![callable_id, "normal-exit"])
 }
 
-pub(crate) fn exceptional_exit_node_id(callable_id: &str) -> NodeId {
-    stable_id("cfg-node", &[callable_id, "exceptional-exit"])
+pub(crate) fn exceptional_exit_node_id(callable_id: NodeId) -> NodeId {
+    stable_id(Tag::CfgNode, id_parts![callable_id, "exceptional-exit"])
 }
 
-pub(crate) fn statement_node_id(callable_id: &str, statement: &StatementAst) -> NodeId {
+pub(crate) fn statement_node_id(callable_id: NodeId, statement: &StatementAst) -> NodeId {
     semantic_node_id(
         callable_id,
         "statement",
@@ -47,7 +49,7 @@ pub(crate) fn statement_node_id(callable_id: &str, statement: &StatementAst) -> 
     )
 }
 
-pub(crate) fn condition_node_id(callable_id: &str, condition: &ConditionAst) -> NodeId {
+pub(crate) fn condition_node_id(callable_id: NodeId, condition: &ConditionAst) -> NodeId {
     semantic_node_id(
         callable_id,
         "condition",
@@ -56,7 +58,7 @@ pub(crate) fn condition_node_id(callable_id: &str, condition: &ConditionAst) -> 
     )
 }
 
-pub(crate) fn return_node_id(callable_id: &str, return_fact: &ReturnAst) -> NodeId {
+pub(crate) fn return_node_id(callable_id: NodeId, return_fact: &ReturnAst) -> NodeId {
     semantic_node_id(
         callable_id,
         "return",
@@ -65,7 +67,7 @@ pub(crate) fn return_node_id(callable_id: &str, return_fact: &ReturnAst) -> Node
     )
 }
 
-pub(crate) fn raise_node_id(callable_id: &str, raise: &RaiseAst) -> NodeId {
+pub(crate) fn raise_node_id(callable_id: NodeId, raise: &RaiseAst) -> NodeId {
     semantic_node_id(callable_id, "raise", raise.source_span, &raise.text)
 }
 
@@ -74,7 +76,7 @@ fn emit_callable(
     index: &CallableIndex,
     semantic: &SemanticCallable<'_>,
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
     let owner = node_owner(semantic);
     let entry_id = entry_node_id(callable_id);
     let normal_exit_id = exit_node_id(callable_id);
@@ -83,15 +85,15 @@ fn emit_callable(
     insert_node(
         graph,
         graph_node(
-            entry_id.clone(),
+            entry_id,
             NodeKind::ControlFlow,
             owner.clone(),
             semantic.callable().body_span,
             Confidence::Exact,
             inference_evidence("callable-local CFG entry"),
             NodeFact::ControlFlow(sg::ControlFlowNode {
-                cfg_node_id: entry_id.clone(),
-                callable_id: callable_id.to_string(),
+                cfg_node_id: entry_id,
+                callable_id,
                 role: ControlFlowNodeRole::Entry,
                 label: "entry".to_string(),
                 semantic_kind: None,
@@ -101,15 +103,15 @@ fn emit_callable(
     insert_node(
         graph,
         graph_node(
-            normal_exit_id.clone(),
+            normal_exit_id,
             NodeKind::ControlFlow,
             owner.clone(),
             semantic.callable().body_span,
             Confidence::Exact,
             inference_evidence("callable-local CFG normal exit"),
             NodeFact::ControlFlow(sg::ControlFlowNode {
-                cfg_node_id: normal_exit_id.clone(),
-                callable_id: callable_id.to_string(),
+                cfg_node_id: normal_exit_id,
+                callable_id,
                 role: ControlFlowNodeRole::Exit,
                 label: "normal exit".to_string(),
                 semantic_kind: Some("NormalExit".to_string()),
@@ -119,15 +121,15 @@ fn emit_callable(
     insert_node(
         graph,
         graph_node(
-            exceptional_exit_id.clone(),
+            exceptional_exit_id,
             NodeKind::ControlFlow,
             owner.clone(),
             semantic.callable().body_span,
             Confidence::Exact,
             inference_evidence("callable-local CFG exceptional exit"),
             NodeFact::ControlFlow(sg::ControlFlowNode {
-                cfg_node_id: exceptional_exit_id.clone(),
-                callable_id: callable_id.to_string(),
+                cfg_node_id: exceptional_exit_id,
+                callable_id,
                 role: ControlFlowNodeRole::Exit,
                 label: "exceptional exit".to_string(),
                 semantic_kind: Some("ExceptionalExit".to_string()),
@@ -144,8 +146,8 @@ fn emit_callable(
         add_cfg_edge(
             graph,
             semantic,
-            &entry_id,
-            &normal_exit_id,
+            entry_id,
+            normal_exit_id,
             ControlFlowKind::Exit,
             None,
         );
@@ -158,18 +160,18 @@ fn emit_callable(
         add_cfg_edge(
             lowering.graph,
             semantic,
-            &entry_id,
-            &first,
+            entry_id,
+            first,
             ControlFlowKind::Entry,
             None,
         );
     }
     for exit in result.exits {
-        let target_id = exit.target_exit_id(&normal_exit_id, &exceptional_exit_id);
+        let target_id = exit.target_exit_id(normal_exit_id, exceptional_exit_id);
         add_cfg_edge_with_metadata(
             lowering.graph,
             semantic,
-            &exit.node_id,
+            exit.node_id,
             target_id,
             ControlFlowKind::Exit,
             exit.kind.outcome(),
@@ -189,7 +191,7 @@ fn cfg_node(
     evidence: &str,
 ) -> sg::GraphNode {
     graph_node(
-        node_id.clone(),
+        node_id,
         NodeKind::ControlFlow,
         node_owner(semantic),
         Some(span),
@@ -197,7 +199,7 @@ fn cfg_node(
         inference_evidence(evidence),
         NodeFact::ControlFlow(sg::ControlFlowNode {
             cfg_node_id: node_id,
-            callable_id: semantic.callable().callable_id.clone(),
+            callable_id: semantic.callable().callable_id,
             role,
             label,
             semantic_kind,
@@ -208,8 +210,8 @@ fn cfg_node(
 fn add_cfg_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    source_id: &str,
-    target_id: &str,
+    source_id: NodeId,
+    target_id: NodeId,
     flow_kind: ControlFlowKind,
     span: Option<SourceSpan>,
 ) {
@@ -228,8 +230,8 @@ fn add_cfg_edge(
 fn add_cfg_edge_with_metadata(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    source_id: &str,
-    target_id: &str,
+    source_id: NodeId,
+    target_id: NodeId,
     flow_kind: ControlFlowKind,
     outcome: sg::ControlFlowOutcome,
     branch_arm: Option<sg::ControlFlowBranchArm>,
@@ -249,14 +251,14 @@ fn add_cfg_edge_with_metadata(
                 &format!("{flow_kind:?}:{outcome_key}"),
             ),
             EdgeKind::ControlFlow,
-            source_id.to_string(),
-            target_id.to_string(),
+            source_id,
+            target_id,
             node_owner(semantic),
             span,
             Confidence::Probable,
             inference_evidence(PRECISION),
             EdgeFact::ControlFlow(sg::ControlFlow {
-                callable_id: semantic.callable().callable_id.clone(),
+                callable_id: semantic.callable().callable_id,
                 flow_kind,
                 outcome,
                 branch_arm,
@@ -276,8 +278,11 @@ fn default_outcome_for_flow_kind(flow_kind: ControlFlowKind) -> sg::ControlFlowO
     }
 }
 
-fn semantic_node_id(callable_id: &str, role: &str, span: SourceSpan, label: &str) -> NodeId {
-    stable_id("cfg-node", &[callable_id, role, &span_key(span), label])
+fn semantic_node_id(callable_id: NodeId, role: &str, span: SourceSpan, label: &str) -> NodeId {
+    stable_id(
+        Tag::CfgNode,
+        id_parts![callable_id, role, &span_key(span), label],
+    )
 }
 
 #[derive(Debug)]
@@ -304,11 +309,11 @@ impl CfgModel {
                     let span = node.span?;
                     let ast = ast_statements_by_span.get(&span)?;
                     Some((
-                        statement.statement_id.clone(),
+                        statement.statement_id,
                         StatementInfo {
-                            statement_id: statement.statement_id.clone(),
-                            cfg_node_id: statement_node_id(&semantic.callable().callable_id, ast),
-                            parent_statement_id: statement.parent_statement_id.clone(),
+                            statement_id: statement.statement_id,
+                            cfg_node_id: statement_node_id(semantic.callable().callable_id, ast),
+                            parent_statement_id: statement.parent_statement_id,
                             kind: statement.kind,
                             ordinal: statement.ordinal,
                             text: ast.text.clone(),
@@ -323,9 +328,9 @@ impl CfgModel {
         let mut children_by_parent = BTreeMap::<Option<NodeId>, Vec<NodeId>>::new();
         for statement in statements.values() {
             children_by_parent
-                .entry(statement.parent_statement_id.clone())
+                .entry(statement.parent_statement_id)
                 .or_default()
-                .push(statement.statement_id.clone());
+                .push(statement.statement_id);
         }
         for child_ids in children_by_parent.values_mut() {
             child_ids.sort_by(|left, right| {
@@ -346,7 +351,7 @@ impl CfgModel {
             let NodeFact::Condition(condition) = &node.fact else {
                 continue;
             };
-            let Some(statement_id) = &condition.statement_id else {
+            let Some(statement_id) = condition.statement_id else {
                 continue;
             };
             let Some(span) = node.span else {
@@ -354,9 +359,9 @@ impl CfgModel {
             };
             let cfg_node_id = ast_conditions_by_span
                 .get(&span)
-                .map(|ast| condition_node_id(&semantic.callable().callable_id, ast))
+                .map(|ast| condition_node_id(semantic.callable().callable_id, ast))
                 .unwrap_or_else(|| {
-                    structured_condition_node_id(&semantic.callable().callable_id, condition, span)
+                    structured_condition_node_id(semantic.callable().callable_id, condition, span)
                 });
             let info = ConditionInfo {
                 cfg_node_id,
@@ -366,9 +371,9 @@ impl CfgModel {
                 span,
             };
             if condition.kind == sg::ConditionKind::ExceptionRegion {
-                exception_conditions_by_statement.insert(statement_id.clone(), info);
+                exception_conditions_by_statement.insert(statement_id, info);
             } else {
-                conditions_by_statement.insert(statement_id.clone(), info);
+                conditions_by_statement.insert(statement_id, info);
             }
         }
 
@@ -378,7 +383,7 @@ impl CfgModel {
             let NodeFact::Expression(expression) = &node.fact else {
                 continue;
             };
-            let Some(statement_id) = &expression.statement_id else {
+            let Some(statement_id) = expression.statement_id else {
                 continue;
             };
             let Some(span) = node.span else {
@@ -388,12 +393,12 @@ impl CfgModel {
                 continue;
             }
             expression_controls_by_statement
-                .entry(statement_id.clone())
+                .entry(statement_id)
                 .or_default()
                 .push(ExpressionControlInfo {
-                    expression_id: expression.expression_id.clone(),
+                    expression_id: expression.expression_id,
                     cfg_node_id: expression_control_node_id(
-                        &semantic.callable().callable_id,
+                        semantic.callable().callable_id,
                         expression,
                     ),
                     kind: expression.kind,
@@ -410,7 +415,7 @@ impl CfgModel {
                 (
                     control.span.start_byte,
                     control.span.end_byte,
-                    control.cfg_node_id.clone(),
+                    control.cfg_node_id,
                 )
             });
             controls.dedup_by(|left, right| left.expression_id == right.expression_id);
@@ -427,22 +432,22 @@ impl CfgModel {
         }
     }
 
-    fn statement_list(&self, parent: Option<&str>) -> Vec<NodeId> {
+    fn statement_list(&self, parent: Option<NodeId>) -> Vec<NodeId> {
         self.children_by_parent
-            .get(&parent.map(str::to_string))
+            .get(&parent)
             .cloned()
             .unwrap_or_default()
     }
 
     fn region_statement_list(
         &self,
-        controller_id: &str,
+        controller_id: NodeId,
         region: &sg::ControlRegion,
     ) -> Vec<NodeId> {
         let region_ids = region
             .statement_ids
             .iter()
-            .cloned()
+            .copied()
             .collect::<BTreeSet<_>>();
         let mut roots = region
             .statement_ids
@@ -451,10 +456,9 @@ impl CfgModel {
             .filter(|statement| {
                 statement
                     .parent_statement_id
-                    .as_deref()
-                    .is_none_or(|parent| parent == controller_id || !region_ids.contains(parent))
+                    .is_none_or(|parent| parent == controller_id || !region_ids.contains(&parent))
             })
-            .map(|statement| statement.statement_id.clone())
+            .map(|statement| statement.statement_id)
             .collect::<Vec<_>>();
         roots.sort_by(|left, right| {
             statement_sort_key(&self.statements[left])
@@ -505,9 +509,9 @@ impl<'a, 'b> Lowering<'a, 'b> {
                 continue;
             }
             if entry.is_none() {
-                entry = result.entry.clone();
+                entry = result.entry;
             }
-            if let Some(next_entry) = &result.entry {
+            if let Some(next_entry) = result.entry {
                 connect_normal_exits(self.graph, self.semantic, &pending, next_entry);
             }
             carried.extend(non_normal_exits(&pending));
@@ -535,43 +539,38 @@ impl<'a, 'b> Lowering<'a, 'b> {
         let cause_summary = terminal_cause_summary(causes);
         let message =
             format!("statement is unreachable because {cause_summary} prevents normal fallthrough");
-        let mut related = vec![
-            statement.statement_id.clone(),
-            statement.cfg_node_id.clone(),
-        ];
+        let mut related = vec![statement.statement_id, statement.cfg_node_id];
         for cause in causes {
-            related.push(cause.statement_id.clone());
-            related.push(cause.cfg_node_id.clone());
+            related.push(cause.statement_id);
+            related.push(cause.cfg_node_id);
         }
         related.sort();
         related.dedup();
+        let related_text = related
+            .iter()
+            .map(NodeId::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        let diagnostic_id = stable_id(
+            Tag::Diagnostic,
+            id_parts![
+                "unreachable-statement",
+                self.semantic.callable().callable_id,
+                statement.statement_id,
+                &related_text
+            ],
+        );
         insert_node(
             self.graph,
             graph_node(
-                stable_id(
-                    "diagnostic",
-                    &[
-                        "unreachable-statement",
-                        &self.semantic.callable().callable_id,
-                        &statement.statement_id,
-                        &related.join("|"),
-                    ],
-                ),
+                diagnostic_id,
                 NodeKind::Diagnostic,
                 node_owner(self.semantic),
                 Some(statement.span),
                 Confidence::Exact,
                 inference_evidence(format!("SG-054 unreachable statement: {cause_summary}")),
                 NodeFact::Diagnostic(sg::Diagnostic {
-                    diagnostic_id: stable_id(
-                        "diagnostic",
-                        &[
-                            "unreachable-statement",
-                            &self.semantic.callable().callable_id,
-                            &statement.statement_id,
-                            &related.join("|"),
-                        ],
-                    ),
+                    diagnostic_id,
                     kind: DiagnosticKind::UnreachableStatement,
                     severity: Severity::Warning,
                     message,
@@ -606,7 +605,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
         LoweringResult {
             entry: Some(entry),
             exits: vec![OpenExit::normal(
-                statement.cfg_node_id.clone(),
+                statement.cfg_node_id,
                 ControlFlowKind::Sequential,
                 statement.span,
             )],
@@ -620,12 +619,12 @@ impl<'a, 'b> Lowering<'a, 'b> {
         env: &LoweringEnv,
     ) -> LoweringResult {
         let entry = self.entry_for_statement(statement);
-        let child_ids = self.model.statement_list(Some(&statement.statement_id));
+        let child_ids = self.model.statement_list(Some(statement.statement_id));
         if child_ids.is_empty() {
             return LoweringResult {
                 entry: Some(entry),
                 exits: vec![OpenExit::normal(
-                    statement.cfg_node_id.clone(),
+                    statement.cfg_node_id,
                     ControlFlowKind::Sequential,
                     statement.span,
                 )],
@@ -634,11 +633,11 @@ impl<'a, 'b> Lowering<'a, 'b> {
         }
 
         let result = self.lower_statement_list(&child_ids, env);
-        if let Some(child_entry) = &result.entry {
+        if let Some(child_entry) = result.entry {
             add_cfg_edge(
                 self.graph,
                 self.semantic,
-                &statement.cfg_node_id,
+                statement.cfg_node_id,
                 child_entry,
                 ControlFlowKind::Sequential,
                 Some(statement.span),
@@ -664,8 +663,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
         add_cfg_edge(
             self.graph,
             self.semantic,
-            &statement.cfg_node_id,
-            &condition.cfg_node_id,
+            statement.cfg_node_id,
+            condition.cfg_node_id,
             ControlFlowKind::Sequential,
             Some(statement.span),
         );
@@ -690,13 +689,13 @@ impl<'a, 'b> Lowering<'a, 'b> {
             let branch_arm = branch_arm(region, ordinal);
             let region_ids = self
                 .model
-                .region_statement_list(&statement.statement_id, region);
+                .region_statement_list(statement.statement_id, region);
             let result = self.lower_statement_list(&region_ids, env);
-            if let Some(region_entry) = &result.entry {
+            if let Some(region_entry) = result.entry {
                 add_cfg_edge_with_metadata(
                     self.graph,
                     self.semantic,
-                    &condition.cfg_node_id,
+                    condition.cfg_node_id,
                     region_entry,
                     ControlFlowKind::Branch,
                     outcome,
@@ -705,7 +704,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
                 );
             } else {
                 exits.push(OpenExit::normal_with_metadata(
-                    condition.cfg_node_id.clone(),
+                    condition.cfg_node_id,
                     ControlFlowKind::Branch,
                     outcome,
                     Some(branch_arm.clone()),
@@ -716,7 +715,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
         }
         if !has_else_region && condition.fallthrough != FallthroughBehavior::DoesNotFallThrough {
             exits.push(OpenExit::normal_with_metadata(
-                condition.cfg_node_id.clone(),
+                condition.cfg_node_id,
                 ControlFlowKind::Branch,
                 sg::ControlFlowOutcome::False,
                 None,
@@ -728,7 +727,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             "branch",
             "branch merge",
             "BranchMerge",
-            &statement.statement_id,
+            statement.statement_id,
             statement.span,
             exits,
         );
@@ -752,14 +751,14 @@ impl<'a, 'b> Lowering<'a, 'b> {
         add_cfg_edge(
             self.graph,
             self.semantic,
-            &statement.cfg_node_id,
-            &condition.cfg_node_id,
+            statement.cfg_node_id,
+            condition.cfg_node_id,
             ControlFlowKind::Sequential,
             Some(statement.span),
         );
 
         let mut loop_env = env.clone();
-        loop_env.loop_condition_id = Some(condition.cfg_node_id.clone());
+        loop_env.loop_condition_id = Some(condition.cfg_node_id);
 
         let mut propagated = Vec::new();
         for (ordinal, region) in condition
@@ -771,13 +770,13 @@ impl<'a, 'b> Lowering<'a, 'b> {
             let branch_arm = branch_arm(region, ordinal);
             let region_ids = self
                 .model
-                .region_statement_list(&statement.statement_id, region);
+                .region_statement_list(statement.statement_id, region);
             let result = self.lower_statement_list(&region_ids, &loop_env);
-            if let Some(region_entry) = &result.entry {
+            if let Some(region_entry) = result.entry {
                 add_cfg_edge_with_metadata(
                     self.graph,
                     self.semantic,
-                    &condition.cfg_node_id,
+                    condition.cfg_node_id,
                     region_entry,
                     ControlFlowKind::Branch,
                     sg::ControlFlowOutcome::True,
@@ -796,8 +795,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
                         add_cfg_edge_with_metadata(
                             self.graph,
                             self.semantic,
-                            &exit.node_id,
-                            &condition.cfg_node_id,
+                            exit.node_id,
+                            condition.cfg_node_id,
                             ControlFlowKind::LoopBack,
                             outcome,
                             None,
@@ -818,7 +817,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             }
         }
         propagated.push(OpenExit::normal_with_metadata(
-            condition.cfg_node_id.clone(),
+            condition.cfg_node_id,
             ControlFlowKind::Branch,
             sg::ControlFlowOutcome::False,
             None,
@@ -828,7 +827,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             "loop-exit",
             "loop exit merge",
             "LoopExitMerge",
-            &statement.statement_id,
+            statement.statement_id,
             statement.span,
             propagated,
         );
@@ -846,8 +845,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
             add_cfg_edge(
                 self.graph,
                 self.semantic,
-                &statement.cfg_node_id,
-                &return_id,
+                statement.cfg_node_id,
+                return_id,
                 ControlFlowKind::Sequential,
                 Some(statement.span),
             );
@@ -864,7 +863,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             LoweringResult {
                 entry: Some(entry),
                 exits: vec![OpenExit {
-                    node_id: statement.cfg_node_id.clone(),
+                    node_id: statement.cfg_node_id,
                     span: statement.span,
                     kind: OpenExitKind::Return,
                 }],
@@ -877,13 +876,13 @@ impl<'a, 'b> Lowering<'a, 'b> {
         let entry = self.entry_for_statement(statement);
         let raise_id = self
             .raise_node_for_statement(statement)
-            .unwrap_or_else(|| statement.cfg_node_id.clone());
+            .unwrap_or_else(|| statement.cfg_node_id);
         if raise_id != statement.cfg_node_id {
             add_cfg_edge(
                 self.graph,
                 self.semantic,
-                &statement.cfg_node_id,
-                &raise_id,
+                statement.cfg_node_id,
+                raise_id,
                 ControlFlowKind::Sequential,
                 Some(statement.span),
             );
@@ -892,8 +891,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
             add_cfg_edge_with_metadata(
                 self.graph,
                 self.semantic,
-                &raise_id,
-                &handler.node_id,
+                raise_id,
+                handler.node_id,
                 ControlFlowKind::Branch,
                 sg::ControlFlowOutcome::Exception,
                 None,
@@ -933,7 +932,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
         LoweringResult {
             entry: Some(self.entry_for_statement(statement)),
             exits: vec![OpenExit {
-                node_id: statement.cfg_node_id.clone(),
+                node_id: statement.cfg_node_id,
                 span: statement.span,
                 kind: OpenExitKind::Break,
             }],
@@ -943,11 +942,11 @@ impl<'a, 'b> Lowering<'a, 'b> {
 
     fn lower_continue(&mut self, statement: &StatementInfo, env: &LoweringEnv) -> LoweringResult {
         let entry = self.entry_for_statement(statement);
-        if let Some(condition_id) = &env.loop_condition_id {
+        if let Some(condition_id) = env.loop_condition_id {
             add_cfg_edge_with_metadata(
                 self.graph,
                 self.semantic,
-                &statement.cfg_node_id,
+                statement.cfg_node_id,
                 condition_id,
                 ControlFlowKind::LoopBack,
                 sg::ControlFlowOutcome::Continue,
@@ -963,7 +962,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             LoweringResult {
                 entry: Some(entry),
                 exits: vec![OpenExit {
-                    node_id: statement.cfg_node_id.clone(),
+                    node_id: statement.cfg_node_id,
                     span: statement.span,
                     kind: OpenExitKind::Continue,
                 }],
@@ -984,8 +983,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
         add_cfg_edge(
             self.graph,
             self.semantic,
-            &statement.cfg_node_id,
-            &condition.cfg_node_id,
+            statement.cfg_node_id,
+            condition.cfg_node_id,
             ControlFlowKind::Sequential,
             Some(statement.span),
         );
@@ -1005,26 +1004,26 @@ impl<'a, 'b> Lowering<'a, 'b> {
 
         let catch_entry = catch_region.and_then(|region| {
             self.model
-                .region_statement_list(&statement.statement_id, region)
+                .region_statement_list(statement.statement_id, region)
                 .first()
                 .and_then(|statement_id| self.model.statements.get(statement_id))
                 .map(|statement| self.entry_for_statement(statement))
         });
         let finally_entry = finally_region.and_then(|region| {
             self.model
-                .region_statement_list(&statement.statement_id, region)
+                .region_statement_list(statement.statement_id, region)
                 .first()
                 .and_then(|statement_id| self.model.statements.get(statement_id))
                 .map(|statement| self.entry_for_statement(statement))
         });
-        let finally_entry_merge = finally_entry.as_ref().map(|_| {
+        let finally_entry_merge = finally_entry.map(|_| {
             let node_id = merge_node_id(
-                &self.semantic.callable().callable_id,
+                self.semantic.callable().callable_id,
                 "finally-entry",
-                &statement.statement_id,
+                statement.statement_id,
             );
             self.insert_merge_node(
-                node_id.clone(),
+                node_id,
                 statement.span,
                 "finally entry merge",
                 "FinallyEntryMerge",
@@ -1035,21 +1034,20 @@ impl<'a, 'b> Lowering<'a, 'b> {
 
         let mut protected_env = env.clone();
         protected_env.exception_handler = catch_entry
-            .clone()
             .map(ExceptionHandler::catch)
-            .or_else(|| finally_entry_merge.clone().map(ExceptionHandler::finally));
+            .or_else(|| finally_entry_merge.map(ExceptionHandler::finally));
 
         let mut exits = Vec::new();
         if let Some(region) = try_region {
             let region_ids = self
                 .model
-                .region_statement_list(&statement.statement_id, region);
+                .region_statement_list(statement.statement_id, region);
             let result = self.lower_statement_list(&region_ids, &protected_env);
-            if let Some(region_entry) = &result.entry {
+            if let Some(region_entry) = result.entry {
                 add_cfg_edge_with_metadata(
                     self.graph,
                     self.semantic,
-                    &condition.cfg_node_id,
+                    condition.cfg_node_id,
                     region_entry,
                     ControlFlowKind::Branch,
                     sg::ControlFlowOutcome::Fallthrough,
@@ -1063,16 +1061,16 @@ impl<'a, 'b> Lowering<'a, 'b> {
         if let Some(region) = catch_region {
             let region_ids = self
                 .model
-                .region_statement_list(&statement.statement_id, region);
+                .region_statement_list(statement.statement_id, region);
             let mut catch_env = env.clone();
             catch_env.exception_handler =
-                finally_entry_merge.clone().map(ExceptionHandler::finally);
+                finally_entry_merge.map(ExceptionHandler::finally);
             let result = self.lower_statement_list(&region_ids, &catch_env);
-            if let Some(region_entry) = &result.entry {
+            if let Some(region_entry) = result.entry {
                 add_cfg_edge_with_metadata(
                     self.graph,
                     self.semantic,
-                    &condition.cfg_node_id,
+                    condition.cfg_node_id,
                     region_entry,
                     ControlFlowKind::Branch,
                     sg::ControlFlowOutcome::Exception,
@@ -1091,18 +1089,16 @@ impl<'a, 'b> Lowering<'a, 'b> {
             let pre_finally_exits = exits;
             let region_ids = self
                 .model
-                .region_statement_list(&statement.statement_id, region);
+                .region_statement_list(statement.statement_id, region);
             let result = self.lower_statement_list(&region_ids, env);
-            if let Some(finally_entry) = &result.entry {
-                let finally_merge = finally_entry_merge
-                    .clone()
-                    .unwrap_or_else(|| finally_entry.clone());
+            if let Some(finally_entry) = result.entry {
+                let finally_merge = finally_entry_merge.unwrap_or(finally_entry);
                 for exit in &pre_finally_exits {
                     add_cfg_edge_with_metadata(
                         self.graph,
                         self.semantic,
-                        &exit.node_id,
-                        &finally_merge,
+                        exit.node_id,
+                        finally_merge,
                         ControlFlowKind::Branch,
                         sg::ControlFlowOutcome::Finally,
                         finally_region.map(|region| branch_arm(region, 2)),
@@ -1113,8 +1109,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
                     add_cfg_edge_with_metadata(
                         self.graph,
                         self.semantic,
-                        &condition.cfg_node_id,
-                        &finally_merge,
+                        condition.cfg_node_id,
+                        finally_merge,
                         ControlFlowKind::Branch,
                         sg::ControlFlowOutcome::Finally,
                         finally_region.map(|region| branch_arm(region, 2)),
@@ -1124,7 +1120,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
                 add_cfg_edge_with_metadata(
                     self.graph,
                     self.semantic,
-                    &finally_merge,
+                    finally_merge,
                     finally_entry,
                     ControlFlowKind::Sequential,
                     sg::ControlFlowOutcome::Finally,
@@ -1140,7 +1136,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             "exception",
             "exception region merge",
             "ExceptionMerge",
-            &statement.statement_id,
+            statement.statement_id,
             statement.span,
             exits,
         );
@@ -1160,34 +1156,34 @@ impl<'a, 'b> Lowering<'a, 'b> {
         else {
             return;
         };
-        let mut previous: Option<&str> = None;
+        let mut previous: Option<NodeId> = None;
         for control in controls {
             if let Some(previous_id) = previous {
                 add_cfg_edge(
                     self.graph,
                     self.semantic,
                     previous_id,
-                    &control.cfg_node_id,
+                    control.cfg_node_id,
                     ControlFlowKind::Branch,
                     Some(control.span),
                 );
             }
-            previous = Some(&control.cfg_node_id);
+            previous = Some(control.cfg_node_id);
         }
         if let Some(last) = controls.last() {
             add_cfg_edge(
                 self.graph,
                 self.semantic,
-                &last.cfg_node_id,
-                &statement.cfg_node_id,
+                last.cfg_node_id,
+                statement.cfg_node_id,
                 ControlFlowKind::Branch,
                 Some(last.span),
             );
             add_cfg_edge(
                 self.graph,
                 self.semantic,
-                &last.cfg_node_id,
-                &statement.cfg_node_id,
+                last.cfg_node_id,
+                statement.cfg_node_id,
                 ControlFlowKind::Sequential,
                 Some(last.span),
             );
@@ -1199,8 +1195,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
             .expression_controls_by_statement
             .get(&statement.statement_id)
             .and_then(|controls| controls.first())
-            .map(|control| control.cfg_node_id.clone())
-            .unwrap_or_else(|| statement.cfg_node_id.clone())
+            .map(|control| control.cfg_node_id)
+            .unwrap_or_else(|| statement.cfg_node_id)
     }
 
     fn return_node_for_statement(&self, statement: &StatementInfo) -> Option<NodeId> {
@@ -1209,7 +1205,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             .iter()
             .filter(|return_fact| return_fact.owner_id == self.semantic.owner_id())
             .find(|return_fact| return_fact.source_span == statement.span)
-            .map(|return_fact| return_node_id(&self.semantic.callable().callable_id, return_fact))
+            .map(|return_fact| return_node_id(self.semantic.callable().callable_id, return_fact))
     }
 
     fn raise_node_for_statement(&self, statement: &StatementInfo) -> Option<NodeId> {
@@ -1218,7 +1214,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
             .iter()
             .filter(|raise| raise.owner_id == self.semantic.owner_id())
             .find(|raise| raise.source_span == statement.span)
-            .map(|raise| raise_node_id(&self.semantic.callable().callable_id, raise))
+            .map(|raise| raise_node_id(self.semantic.callable().callable_id, raise))
     }
 
     fn materialize_merge(
@@ -1226,7 +1222,7 @@ impl<'a, 'b> Lowering<'a, 'b> {
         kind: &str,
         label: &str,
         semantic_kind: &str,
-        anchor_id: &str,
+        anchor_id: NodeId,
         span: SourceSpan,
         exits: Vec<OpenExit>,
     ) -> Vec<OpenExit> {
@@ -1243,9 +1239,9 @@ impl<'a, 'b> Lowering<'a, 'b> {
             return propagated;
         }
 
-        let merge_id = merge_node_id(&self.semantic.callable().callable_id, kind, anchor_id);
+        let merge_id = merge_node_id(self.semantic.callable().callable_id, kind, anchor_id);
         self.insert_merge_node(
-            merge_id.clone(),
+            merge_id,
             span,
             label,
             semantic_kind,
@@ -1255,8 +1251,8 @@ impl<'a, 'b> Lowering<'a, 'b> {
             add_cfg_edge_with_metadata(
                 self.graph,
                 self.semantic,
-                &exit.node_id,
-                &merge_id,
+                exit.node_id,
+                merge_id,
                 exit.kind.flow_kind(),
                 exit.kind.outcome(),
                 exit.kind.branch_arm().cloned(),
@@ -1309,7 +1305,7 @@ fn insert_cfg_nodes(
             graph,
             cfg_node(
                 semantic,
-                statement.cfg_node_id.clone(),
+                statement.cfg_node_id,
                 statement.span,
                 role,
                 statement.text.clone(),
@@ -1328,7 +1324,7 @@ fn insert_cfg_nodes(
             graph,
             cfg_node(
                 semantic,
-                condition.cfg_node_id.clone(),
+                condition.cfg_node_id,
                 condition.span,
                 ControlFlowNodeRole::Condition,
                 format!("{:?}", condition.kind),
@@ -1358,7 +1354,7 @@ fn insert_cfg_nodes(
         .iter()
         .filter(|return_fact| return_fact.owner_id == semantic.owner_id())
     {
-        let node_id = return_node_id(&semantic.callable().callable_id, return_fact);
+        let node_id = return_node_id(semantic.callable().callable_id, return_fact);
         insert_node(
             graph,
             cfg_node(
@@ -1381,7 +1377,7 @@ fn insert_cfg_nodes(
         .iter()
         .filter(|raise| raise.owner_id == semantic.owner_id())
     {
-        let node_id = raise_node_id(&semantic.callable().callable_id, raise);
+        let node_id = raise_node_id(semantic.callable().callable_id, raise);
         insert_node(
             graph,
             cfg_node(
@@ -1414,7 +1410,7 @@ fn insert_basic_block_nodes(
                     graph,
                     semantic,
                     model,
-                    parent_id.as_deref(),
+                    *parent_id,
                     ordinal,
                     &block,
                 );
@@ -1424,13 +1420,13 @@ fn insert_basic_block_nodes(
                 }
                 continue;
             }
-            block.push(statement.statement_id.clone());
+            block.push(statement.statement_id);
         }
         insert_basic_block_node(
             graph,
             semantic,
             model,
-            parent_id.as_deref(),
+            *parent_id,
             ordinal,
             &block,
         );
@@ -1444,7 +1440,7 @@ fn insert_basic_block_node(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
     model: &CfgModel,
-    parent_id: Option<&str>,
+    parent_id: Option<NodeId>,
     ordinal: usize,
     statement_ids: &[NodeId],
 ) {
@@ -1453,14 +1449,18 @@ fn insert_basic_block_node(
     }
     let first = &model.statements[&statement_ids[0]];
     let last = &model.statements[statement_ids.last().expect("non-empty basic block")];
+    let parent_part = match parent_id {
+        Some(parent) => IdPart::from(parent),
+        None => IdPart::from("top-level"),
+    };
     let node_id = stable_id(
-        "basic-block",
+        Tag::BasicBlock,
         &[
-            &semantic.callable().callable_id,
-            parent_id.unwrap_or("top-level"),
-            &ordinal.to_string(),
-            &first.statement_id,
-            &last.statement_id,
+            IdPart::from(semantic.callable().callable_id),
+            parent_part,
+            IdPart::U64(ordinal as u64),
+            IdPart::from(first.statement_id),
+            IdPart::from(last.statement_id),
         ],
     );
     let span = SourceSpan {
@@ -1474,7 +1474,7 @@ fn insert_basic_block_node(
     insert_node(
         graph,
         graph_node(
-            node_id.clone(),
+            node_id,
             NodeKind::BasicBlock,
             node_owner(semantic),
             Some(span),
@@ -1482,12 +1482,12 @@ fn insert_basic_block_node(
             inference_evidence("compact straight-line CFG basic block"),
             NodeFact::BasicBlock(sg::BasicBlock {
                 basic_block_id: node_id,
-                callable_id: semantic.callable().callable_id.clone(),
+                callable_id: semantic.callable().callable_id,
                 kind: BasicBlockKind::StraightLine,
                 ordinal,
                 statement_ids: statement_ids.to_vec(),
-                entry_node_id: Some(first.cfg_node_id.clone()),
-                exit_node_id: Some(last.cfg_node_id.clone()),
+                entry_node_id: Some(first.cfg_node_id),
+                exit_node_id: Some(last.cfg_node_id),
             }),
         ),
     );
@@ -1513,13 +1513,13 @@ fn connect_normal_exits(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
     exits: &[OpenExit],
-    target_id: &str,
+    target_id: NodeId,
 ) {
     for exit in exits.iter().filter(|exit| exit.kind.is_normal()) {
         add_cfg_edge_with_metadata(
             graph,
             semantic,
-            &exit.node_id,
+            exit.node_id,
             target_id,
             exit.kind.flow_kind(),
             exit.kind.outcome(),
@@ -1547,12 +1547,12 @@ fn terminal_causes_from_exits(model: &CfgModel, exits: &[OpenExit]) -> Vec<Termi
         (
             left.span.start_byte,
             left.span.end_byte,
-            left.statement_id.as_str(),
+            left.statement_id,
         )
             .cmp(&(
                 right.span.start_byte,
                 right.span.end_byte,
-                right.statement_id.as_str(),
+                right.statement_id,
             ))
     });
     causes.dedup_by(|left, right| left.statement_id == right.statement_id);
@@ -1604,32 +1604,32 @@ fn expression_is_control_region(expression: &sg::Expression) -> bool {
     }
 }
 
-fn expression_control_node_id(callable_id: &str, expression: &sg::Expression) -> NodeId {
+fn expression_control_node_id(callable_id: NodeId, expression: &sg::Expression) -> NodeId {
     stable_id(
-        "cfg-node",
-        &[callable_id, "expression-control", &expression.expression_id],
+        Tag::CfgNode,
+        id_parts![callable_id, "expression-control", expression.expression_id],
     )
 }
 
 fn structured_condition_node_id(
-    callable_id: &str,
+    callable_id: NodeId,
     condition: &sg::Condition,
     span: SourceSpan,
 ) -> NodeId {
     stable_id(
-        "cfg-node",
-        &[
+        Tag::CfgNode,
+        id_parts![
             callable_id,
             "condition",
             &format!("{:?}", condition.kind),
             &span_key(span),
-            &condition.condition_id,
+            condition.condition_id
         ],
     )
 }
 
-fn merge_node_id(callable_id: &str, kind: &str, anchor_id: &str) -> NodeId {
-    stable_id("cfg-node", &[callable_id, "merge", kind, anchor_id])
+fn merge_node_id(callable_id: NodeId, kind: &str, anchor_id: NodeId) -> NodeId {
+    stable_id(Tag::CfgNode, id_parts![callable_id, "merge", kind, anchor_id])
 }
 
 fn branch_region_outcome(kind: ControlRegionKind) -> sg::ControlFlowOutcome {
@@ -1678,7 +1678,7 @@ fn statement_sort_key(statement: &StatementInfo) -> (usize, usize, usize, Statem
         statement.span.end_byte,
         statement.ordinal,
         statement.kind,
-        statement.statement_id.clone(),
+        statement.statement_id,
     )
 }
 
@@ -1705,8 +1705,8 @@ struct TerminalCause {
 impl TerminalCause {
     fn from_statement(statement: &StatementInfo) -> Self {
         Self {
-            statement_id: statement.statement_id.clone(),
-            cfg_node_id: statement.cfg_node_id.clone(),
+            statement_id: statement.statement_id,
+            cfg_node_id: statement.cfg_node_id,
             kind: statement.kind,
             text: statement.text.clone(),
             span: statement.span,
@@ -1861,7 +1861,7 @@ impl OpenExitKind {
 }
 
 impl OpenExit {
-    fn target_exit_id<'a>(&self, normal_exit_id: &'a str, exceptional_exit_id: &'a str) -> &'a str {
+    fn target_exit_id(&self, normal_exit_id: NodeId, exceptional_exit_id: NodeId) -> NodeId {
         match self.kind {
             OpenExitKind::Raise => exceptional_exit_id,
             OpenExitKind::Normal { .. }
@@ -1885,7 +1885,7 @@ fn exits_after_finally(
         for finally_exit in &finally_exits {
             match finally_exit.kind {
                 OpenExitKind::Normal { .. } => exits.push(OpenExit {
-                    node_id: finally_exit.node_id.clone(),
+                    node_id: finally_exit.node_id,
                     span: finally_exit.span,
                     kind: pending.kind.clone(),
                 }),
@@ -1907,8 +1907,13 @@ mod tests {
         StatementAst, StatementKind as AstStatementKind,
     };
     use crate::supergraph::{
-        ControlFlowKind, ControlFlowOutcome, DiagnosticKind, EdgeFact, NodeFact, ProgramSupergraph,
+        ControlFlowKind, ControlFlowOutcome, DiagnosticKind, EdgeFact, EdgeId, NodeFact, NodeId,
+        ProgramSupergraph,
     };
+
+    fn sample_callable() -> NodeId {
+        crate::supergraph::ids::callable_id_from_text("sample:<module>")
+    }
 
     #[test]
     fn sg050_lowers_python_cfg_from_structured_statement_regions() {
@@ -2069,7 +2074,7 @@ mod tests {
 
     fn assert_structured_cfg(graph: &ProgramSupergraph, python: bool) {
         let edges = cfg_edges(graph);
-        let entry = super::entry_node_id("sample:<module>");
+        let entry = super::entry_node_id(sample_callable());
         let start = cfg_statement_with_label(graph, "start()");
         let if_stmt = cfg_statement_with_label(
             graph,
@@ -2124,102 +2129,102 @@ mod tests {
         let finally_stmt = cfg_statement_with_label(graph, "finally");
         let cleanup = cfg_statement_with_label(graph, "cleanup()");
         let return_stmt = cfg_statement_with_label(graph, "return done");
-        let exit = super::exit_node_id("sample:<module>");
+        let exit = super::exit_node_id(sample_callable());
 
-        assert_edge(&edges, &entry, &start, ControlFlowKind::Entry);
-        assert_edge(&edges, &start, &if_stmt, ControlFlowKind::Sequential);
-        assert_edge(&edges, &if_stmt, &if_condition, ControlFlowKind::Sequential);
-        assert_edge(&edges, &if_condition, &success, ControlFlowKind::Branch);
-        assert_edge(&edges, &if_condition, &recover, ControlFlowKind::Branch);
-        assert_edge(&edges, &success, &if_merge, ControlFlowKind::Sequential);
-        assert_edge(&edges, &recover, &if_merge, ControlFlowKind::Sequential);
-        assert_edge(&edges, &if_merge, &after_if, ControlFlowKind::Sequential);
-        assert_edge(&edges, &after_if, &loop_stmt, ControlFlowKind::Sequential);
+        assert_edge(&edges, entry, start, ControlFlowKind::Entry);
+        assert_edge(&edges, start, if_stmt, ControlFlowKind::Sequential);
+        assert_edge(&edges, if_stmt, if_condition, ControlFlowKind::Sequential);
+        assert_edge(&edges, if_condition, success, ControlFlowKind::Branch);
+        assert_edge(&edges, if_condition, recover, ControlFlowKind::Branch);
+        assert_edge(&edges, success, if_merge, ControlFlowKind::Sequential);
+        assert_edge(&edges, recover, if_merge, ControlFlowKind::Sequential);
+        assert_edge(&edges, if_merge, after_if, ControlFlowKind::Sequential);
+        assert_edge(&edges, after_if, loop_stmt, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &loop_stmt,
-            &loop_condition,
+            loop_stmt,
+            loop_condition,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &loop_condition, &tick, ControlFlowKind::Branch);
-        assert_edge(&edges, &tick, &stop_if, ControlFlowKind::Sequential);
+        assert_edge(&edges, loop_condition, tick, ControlFlowKind::Branch);
+        assert_edge(&edges, tick, stop_if, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &stop_if,
-            &stop_condition,
+            stop_if,
+            stop_condition,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &stop_condition,
-            &break_stmt,
+            stop_condition,
+            break_stmt,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &stop_condition,
-            &stop_merge,
+            stop_condition,
+            stop_merge,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &stop_merge,
-            &continue_stmt,
+            stop_merge,
+            continue_stmt,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &continue_stmt,
-            &loop_condition,
+            continue_stmt,
+            loop_condition,
             ControlFlowKind::LoopBack,
         );
-        assert_edge(&edges, &break_stmt, &loop_merge, ControlFlowKind::Branch);
+        assert_edge(&edges, break_stmt, loop_merge, ControlFlowKind::Branch);
         assert_edge(
             &edges,
-            &loop_condition,
-            &loop_merge,
+            loop_condition,
+            loop_merge,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &loop_merge,
-            &after_loop,
+            loop_merge,
+            after_loop,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &after_loop, &try_stmt, ControlFlowKind::Sequential);
+        assert_edge(&edges, after_loop, try_stmt, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &try_stmt,
-            &try_condition,
+            try_stmt,
+            try_condition,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &try_condition, &risky, ControlFlowKind::Branch);
+        assert_edge(&edges, try_condition, risky, ControlFlowKind::Branch);
         assert_edge(
             &edges,
-            &handled,
-            &finally_entry_merge,
+            handled,
+            finally_entry_merge,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &finally_entry_merge,
-            &finally_stmt,
+            finally_entry_merge,
+            finally_stmt,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &finally_stmt, &cleanup, ControlFlowKind::Sequential);
+        assert_edge(&edges, finally_stmt, cleanup, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &cleanup,
-            &exception_merge,
+            cleanup,
+            exception_merge,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &exception_merge,
-            &return_stmt,
+            exception_merge,
+            return_stmt,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &return_node(graph), &exit, ControlFlowKind::Exit);
+        assert_edge(&edges, return_node(graph), exit, ControlFlowKind::Exit);
         assert_basic_blocks(graph);
 
         assert!(
@@ -2266,12 +2271,12 @@ mod tests {
         let finally_stmt = cfg_statement_with_label(graph, "finally");
         let cleanup = cfg_statement_with_label(graph, "cleanup()");
         let return_cfg = return_node(graph);
-        let normal_exit = super::normal_exit_node_id("sample:<module>");
+        let normal_exit = super::normal_exit_node_id(sample_callable());
 
         assert_edge_outcome(
             graph,
-            &start,
-            &cfg_statement_with_label(
+            start,
+            cfg_statement_with_label(
                 graph,
                 if python {
                     "if flag:\n    success()\nelse:\n    recover()"
@@ -2284,127 +2289,127 @@ mod tests {
         );
         assert_edge_outcome(
             graph,
-            &if_condition,
-            &success,
+            if_condition,
+            success,
             ControlFlowOutcome::True,
             Some("branch-body"),
         );
         assert_edge_outcome(
             graph,
-            &if_condition,
-            &recover,
+            if_condition,
+            recover,
             ControlFlowOutcome::False,
             Some("else-body"),
         );
         assert_edge_outcome(
             graph,
-            &success,
-            &if_merge,
+            success,
+            if_merge,
             ControlFlowOutcome::True,
             Some("branch-body"),
         );
         assert_edge_outcome(
             graph,
-            &recover,
-            &if_merge,
+            recover,
+            if_merge,
             ControlFlowOutcome::False,
             Some("else-body"),
         );
         assert_edge_outcome(
             graph,
-            &if_merge,
-            &after_if,
+            if_merge,
+            after_if,
             ControlFlowOutcome::Fallthrough,
             None,
         );
         assert_edge_outcome(
             graph,
-            &loop_condition,
-            &tick,
+            loop_condition,
+            tick,
             ControlFlowOutcome::True,
             Some("loop-body"),
         );
         assert_edge_outcome(
             graph,
-            &stop_condition,
-            &break_stmt,
+            stop_condition,
+            break_stmt,
             ControlFlowOutcome::True,
             Some("branch-body"),
         );
         assert_edge_outcome(
             graph,
-            &stop_condition,
-            &stop_merge,
+            stop_condition,
+            stop_merge,
             ControlFlowOutcome::False,
             None,
         );
         assert_edge_outcome(
             graph,
-            &break_stmt,
-            &loop_merge,
+            break_stmt,
+            loop_merge,
             ControlFlowOutcome::Break,
             None,
         );
         assert_edge_outcome(
             graph,
-            &continue_stmt,
-            &loop_condition,
+            continue_stmt,
+            loop_condition,
             ControlFlowOutcome::Continue,
             None,
         );
         assert_edge_outcome(
             graph,
-            &loop_condition,
-            &loop_merge,
+            loop_condition,
+            loop_merge,
             ControlFlowOutcome::False,
             None,
         );
         assert_edge_outcome(
             graph,
-            &loop_merge,
-            &after_loop,
+            loop_merge,
+            after_loop,
             ControlFlowOutcome::Fallthrough,
             None,
         );
         assert_edge_outcome(
             graph,
-            &try_condition,
-            &risky,
+            try_condition,
+            risky,
             ControlFlowOutcome::Fallthrough,
             Some("try-body"),
         );
         assert_edge_outcome(
             graph,
-            &handled_raise,
-            &catch_stmt,
+            handled_raise,
+            catch_stmt,
             ControlFlowOutcome::Exception,
             None,
         );
         assert_edge_outcome(
             graph,
-            &handled,
-            &finally_entry_merge,
+            handled,
+            finally_entry_merge,
             ControlFlowOutcome::Finally,
             Some("finally-body"),
         );
         assert_edge_outcome(
             graph,
-            &finally_entry_merge,
-            &finally_stmt,
+            finally_entry_merge,
+            finally_stmt,
             ControlFlowOutcome::Finally,
             Some("finally-body"),
         );
         assert_edge_outcome(
             graph,
-            &cleanup,
-            &exception_merge,
+            cleanup,
+            exception_merge,
             ControlFlowOutcome::Exception,
             Some("catch-body"),
         );
         assert_edge_outcome(
             graph,
-            &return_cfg,
-            &normal_exit,
+            return_cfg,
+            normal_exit,
             ControlFlowOutcome::Return,
             None,
         );
@@ -2482,12 +2487,12 @@ mod tests {
 
         let catch_stmt = cfg_statement_with_label(graph, "catch");
         let handled = cfg_statement_with_label(graph, "handled()");
-        assert_edge(&edges, &catch_stmt, &handled, ControlFlowKind::Sequential);
+        assert_edge(&edges, catch_stmt, handled, ControlFlowKind::Sequential);
     }
 
     fn assert_sg121_exact_cfg_edges(graph: &ProgramSupergraph, python: bool) {
-        let entry = super::entry_node_id("sample:<module>");
-        let normal_exit = super::normal_exit_node_id("sample:<module>");
+        let entry = super::entry_node_id(sample_callable());
+        let normal_exit = super::normal_exit_node_id(sample_callable());
         let start = cfg_statement_with_label(graph, "start()");
         let if_stmt = cfg_statement_with_label(
             graph,
@@ -2572,260 +2577,260 @@ mod tests {
 
         let expected = BTreeSet::from([
             cfg_edge(
-                &entry,
-                &start,
+                entry,
+                start,
                 ControlFlowKind::Entry,
                 ControlFlowOutcome::Entry,
                 None,
             ),
             cfg_edge(
-                &start,
-                &if_stmt,
+                start,
+                if_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &if_stmt,
-                &if_condition,
+                if_stmt,
+                if_condition,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &if_condition,
-                &success,
+                if_condition,
+                success,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::True,
                 Some(("branch-body", 0)),
             ),
             cfg_edge(
-                &if_condition,
-                &recover,
+                if_condition,
+                recover,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::False,
                 Some(("else-body", 1)),
             ),
             cfg_edge(
-                &success,
-                &if_merge,
+                success,
+                if_merge,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::True,
                 Some(("branch-body", 0)),
             ),
             cfg_edge(
-                &recover,
-                &if_merge,
+                recover,
+                if_merge,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::False,
                 Some(("else-body", 1)),
             ),
             cfg_edge(
-                &if_merge,
-                &after_if,
+                if_merge,
+                after_if,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &after_if,
-                &loop_stmt,
+                after_if,
+                loop_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &loop_stmt,
-                &loop_condition,
+                loop_stmt,
+                loop_condition,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &loop_condition,
-                &tick,
+                loop_condition,
+                tick,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::True,
                 Some(("loop-body", 0)),
             ),
             cfg_edge(
-                &tick,
-                &stop_if,
+                tick,
+                stop_if,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &stop_if,
-                &stop_condition,
+                stop_if,
+                stop_condition,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &stop_condition,
-                &break_stmt,
+                stop_condition,
+                break_stmt,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::True,
                 Some(("branch-body", 0)),
             ),
             cfg_edge(
-                &stop_condition,
-                &stop_merge,
+                stop_condition,
+                stop_merge,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::False,
                 None,
             ),
             cfg_edge(
-                &stop_merge,
-                &continue_stmt,
+                stop_merge,
+                continue_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &continue_stmt,
-                &loop_condition,
+                continue_stmt,
+                loop_condition,
                 ControlFlowKind::LoopBack,
                 ControlFlowOutcome::Continue,
                 None,
             ),
             cfg_edge(
-                &break_stmt,
-                &loop_merge,
+                break_stmt,
+                loop_merge,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Break,
                 None,
             ),
             cfg_edge(
-                &loop_condition,
-                &loop_merge,
+                loop_condition,
+                loop_merge,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::False,
                 None,
             ),
             cfg_edge(
-                &loop_merge,
-                &after_loop,
+                loop_merge,
+                after_loop,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &after_loop,
-                &try_stmt,
+                after_loop,
+                try_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &try_stmt,
-                &try_condition,
+                try_stmt,
+                try_condition,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &try_condition,
-                &risky,
+                try_condition,
+                risky,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Fallthrough,
                 Some(("try-body", 0)),
             ),
             cfg_edge(
-                &risky,
-                &handled_raise_stmt,
+                risky,
+                handled_raise_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &handled_raise_stmt,
-                &handled_raise,
+                handled_raise_stmt,
+                handled_raise,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &handled_raise,
-                &catch_stmt,
+                handled_raise,
+                catch_stmt,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Exception,
                 None,
             ),
             cfg_edge(
-                &try_condition,
-                &catch_stmt,
+                try_condition,
+                catch_stmt,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Exception,
                 Some(("catch-body", 1)),
             ),
             cfg_edge(
-                &catch_stmt,
-                &handled,
+                catch_stmt,
+                handled,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &handled,
-                &finally_entry_merge,
+                handled,
+                finally_entry_merge,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Finally,
                 Some(("finally-body", 2)),
             ),
             cfg_edge(
-                &finally_entry_merge,
-                &finally_stmt,
+                finally_entry_merge,
+                finally_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Finally,
                 Some(("finally-body", 2)),
             ),
             cfg_edge(
-                &finally_stmt,
-                &cleanup,
+                finally_stmt,
+                cleanup,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &cleanup,
-                &exception_merge,
+                cleanup,
+                exception_merge,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Exception,
                 Some(("catch-body", 1)),
             ),
             cfg_edge(
-                &exception_merge,
-                &return_stmt,
+                exception_merge,
+                return_stmt,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &return_stmt,
-                &return_cfg,
+                return_stmt,
+                return_cfg,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
             ),
             cfg_edge(
-                &return_cfg,
-                &normal_exit,
+                return_cfg,
+                normal_exit,
                 ControlFlowKind::Exit,
                 ControlFlowOutcome::Return,
                 None,
             ),
             cfg_edge(
-                &short_circuit,
-                &short_circuit_statement,
+                short_circuit,
+                short_circuit_statement,
                 ControlFlowKind::Branch,
                 ControlFlowOutcome::Arm,
                 None,
             ),
             cfg_edge(
-                &short_circuit,
-                &short_circuit_statement,
+                short_circuit,
+                short_circuit_statement,
                 ControlFlowKind::Sequential,
                 ControlFlowOutcome::Fallthrough,
                 None,
@@ -2833,11 +2838,11 @@ mod tests {
         ]);
 
         assert_eq!(cfg_edge_facts(graph), expected);
-        assert_cfg_node_role(graph, &entry, "Entry");
-        assert_cfg_node_role(graph, &if_condition, "Condition");
-        assert_cfg_node_role(graph, &if_merge, "Merge");
-        assert_cfg_node_role(graph, &loop_merge, "Merge");
-        assert_cfg_node_role(graph, &return_cfg, "Return");
+        assert_cfg_node_role(graph, entry, "Entry");
+        assert_cfg_node_role(graph, if_condition, "Condition");
+        assert_cfg_node_role(graph, if_merge, "Merge");
+        assert_cfg_node_role(graph, loop_merge, "Merge");
+        assert_cfg_node_role(graph, return_cfg, "Return");
         assert_basic_blocks(graph);
         assert!(
             cfg_control_flow_facts(graph)
@@ -2848,23 +2853,23 @@ mod tests {
     }
 
     fn assert_sg121_exceptional_exit_metadata(graph: &ProgramSupergraph, python: bool) {
-        let exceptional_exit = super::exceptional_exit_node_id("sample:<module>");
+        let exceptional_exit = super::exceptional_exit_node_id(sample_callable());
         let fatal_raise = cfg_raise_at(graph, span(25, 38));
         let catch_stmt = cfg_statement_with_label(graph, "catch");
         let handled_raise = cfg_raise_at(graph, span(94, 106));
 
         assert_exact_edge(
             graph,
-            &fatal_raise,
-            &exceptional_exit,
+            fatal_raise,
+            exceptional_exit,
             ControlFlowKind::Exit,
             ControlFlowOutcome::Exception,
             None,
         );
         assert_exact_edge(
             graph,
-            &handled_raise,
-            &catch_stmt,
+            handled_raise,
+            catch_stmt,
             ControlFlowKind::Branch,
             ControlFlowOutcome::Exception,
             None,
@@ -2881,8 +2886,8 @@ mod tests {
     }
 
     fn assert_sg121_switch_match_fallback(graph: &ProgramSupergraph, python: bool) {
-        let entry = super::entry_node_id("sample:<module>");
-        let normal_exit = super::normal_exit_node_id("sample:<module>");
+        let entry = super::entry_node_id(sample_callable());
+        let normal_exit = super::normal_exit_node_id(sample_callable());
         let statement = cfg_statement_with_label(
             graph,
             if python {
@@ -2893,15 +2898,15 @@ mod tests {
         );
         let expected = BTreeSet::from([
             cfg_edge(
-                &entry,
-                &statement,
+                entry,
+                statement,
                 ControlFlowKind::Entry,
                 ControlFlowOutcome::Entry,
                 None,
             ),
             cfg_edge(
-                &statement,
-                &normal_exit,
+                statement,
+                normal_exit,
                 ControlFlowKind::Exit,
                 ControlFlowOutcome::Fallthrough,
                 None,
@@ -2909,7 +2914,7 @@ mod tests {
         ]);
 
         assert_eq!(cfg_edge_facts(graph), expected);
-        assert_cfg_node_role(graph, &statement, "Statement");
+        assert_cfg_node_role(graph, statement, "Statement");
         assert!(
             graph.nodes.iter().all(|node| {
                 !matches!(
@@ -2934,8 +2939,8 @@ mod tests {
 
     fn assert_callable_exit_cfg(graph: &ProgramSupergraph, python: bool) {
         let edges = cfg_edges(graph);
-        let normal_exit = super::normal_exit_node_id("sample:<module>");
-        let exceptional_exit = super::exceptional_exit_node_id("sample:<module>");
+        let normal_exit = super::normal_exit_node_id(sample_callable());
+        let exceptional_exit = super::exceptional_exit_node_id(sample_callable());
         let start = cfg_statement_with_label(graph, "start()");
         let fatal_if = cfg_statement_with_label(
             graph,
@@ -2969,41 +2974,41 @@ mod tests {
         let return_stmt = cfg_statement_with_label(graph, "return done");
         let return_cfg = cfg_return_at(graph, span(170, 181));
 
-        assert_edge(&edges, &start, &fatal_if, ControlFlowKind::Sequential);
+        assert_edge(&edges, start, fatal_if, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &fatal_if,
-            &fatal_condition,
+            fatal_if,
+            fatal_condition,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &fatal_condition,
-            &unhandled_raise_stmt,
+            fatal_condition,
+            unhandled_raise_stmt,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &unhandled_raise_stmt,
-            &unhandled_raise,
+            unhandled_raise_stmt,
+            unhandled_raise,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &fatal_condition,
-            &fatal_merge,
+            fatal_condition,
+            fatal_merge,
             ControlFlowKind::Branch,
         );
-        assert_edge(&edges, &fatal_merge, &after_if, ControlFlowKind::Sequential);
+        assert_edge(&edges, fatal_merge, after_if, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &unhandled_raise,
-            &exceptional_exit,
+            unhandled_raise,
+            exceptional_exit,
             ControlFlowKind::Exit,
         );
-        assert_edge(&edges, &try_condition, &risky, ControlFlowKind::Branch);
-        assert_edge(&edges, &handled_raise, &catch_stmt, ControlFlowKind::Branch);
-        assert_edge(&edges, &catch_stmt, &handled, ControlFlowKind::Sequential);
+        assert_edge(&edges, try_condition, risky, ControlFlowKind::Branch);
+        assert_edge(&edges, handled_raise, catch_stmt, ControlFlowKind::Branch);
+        assert_edge(&edges, catch_stmt, handled, ControlFlowKind::Sequential);
         assert!(
             !edges.iter().any(|(source, target, kind)| {
                 source == &handled_raise
@@ -3014,41 +3019,41 @@ mod tests {
         );
         assert_edge(
             &edges,
-            &handled,
-            &finally_entry_merge,
+            handled,
+            finally_entry_merge,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &finally_entry_merge,
-            &finally_stmt,
+            finally_entry_merge,
+            finally_stmt,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &finally_stmt, &cleanup, ControlFlowKind::Sequential);
+        assert_edge(&edges, finally_stmt, cleanup, ControlFlowKind::Sequential);
         assert_edge(
             &edges,
-            &cleanup,
-            &exception_merge,
-            ControlFlowKind::Sequential,
-        );
-        assert_edge(
-            &edges,
-            &exception_merge,
-            &return_stmt,
+            cleanup,
+            exception_merge,
             ControlFlowKind::Sequential,
         );
         assert_edge(
             &edges,
-            &return_stmt,
-            &return_cfg,
+            exception_merge,
+            return_stmt,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &return_cfg, &normal_exit, ControlFlowKind::Exit);
+        assert_edge(
+            &edges,
+            return_stmt,
+            return_cfg,
+            ControlFlowKind::Sequential,
+        );
+        assert_edge(&edges, return_cfg, normal_exit, ControlFlowKind::Exit);
     }
 
     fn assert_unhandled_finally_cfg(graph: &ProgramSupergraph) {
         let edges = cfg_edges(graph);
-        let exceptional_exit = super::exceptional_exit_node_id("sample:<module>");
+        let exceptional_exit = super::exceptional_exit_node_id(sample_callable());
         let raise = cfg_raise_at(graph, span(12, 24));
         let finally_entry_merge = cfg_merge_at(graph, span(0, 80), "FinallyEntryMerge");
         let finally_stmt = cfg_statement_with_label(graph, "finally");
@@ -3056,21 +3061,21 @@ mod tests {
 
         assert_edge(
             &edges,
-            &raise,
-            &finally_entry_merge,
+            raise,
+            finally_entry_merge,
             ControlFlowKind::Branch,
         );
         assert_edge(
             &edges,
-            &finally_entry_merge,
-            &finally_stmt,
+            finally_entry_merge,
+            finally_stmt,
             ControlFlowKind::Sequential,
         );
-        assert_edge(&edges, &finally_stmt, &cleanup, ControlFlowKind::Sequential);
-        assert_edge(&edges, &cleanup, &exceptional_exit, ControlFlowKind::Exit);
+        assert_edge(&edges, finally_stmt, cleanup, ControlFlowKind::Sequential);
+        assert_edge(&edges, cleanup, exceptional_exit, ControlFlowKind::Exit);
     }
 
-    fn cfg_edges(graph: &ProgramSupergraph) -> BTreeSet<(String, String, ControlFlowKind)> {
+    fn cfg_edges(graph: &ProgramSupergraph) -> BTreeSet<(NodeId, NodeId, ControlFlowKind)> {
         cfg_control_flow_facts(graph)
             .into_iter()
             .map(|(source, target, _, flow)| (source, target, flow.flow_kind))
@@ -3079,23 +3084,23 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     struct ExpectedCfgEdge {
-        source: String,
-        target: String,
+        source: NodeId,
+        target: NodeId,
         flow_kind: ControlFlowKind,
         outcome: ControlFlowOutcome,
         branch_arm: Option<(String, usize)>,
     }
 
     fn cfg_edge(
-        source: &str,
-        target: &str,
+        source: NodeId,
+        target: NodeId,
         flow_kind: ControlFlowKind,
         outcome: ControlFlowOutcome,
         branch_arm: Option<(&str, usize)>,
     ) -> ExpectedCfgEdge {
         ExpectedCfgEdge {
-            source: source.to_string(),
-            target: target.to_string(),
+            source,
+            target,
             flow_kind,
             outcome,
             branch_arm: branch_arm.map(|(label, ordinal)| (label.to_string(), ordinal)),
@@ -3117,8 +3122,8 @@ mod tests {
 
     fn assert_exact_edge(
         graph: &ProgramSupergraph,
-        source: &str,
-        target: &str,
+        source: NodeId,
+        target: NodeId,
         flow_kind: ControlFlowKind,
         outcome: ControlFlowOutcome,
         branch_arm: Option<(&str, usize)>,
@@ -3131,13 +3136,13 @@ mod tests {
     }
 
     fn assert_edge(
-        edges: &BTreeSet<(String, String, ControlFlowKind)>,
-        source: &str,
-        target: &str,
+        edges: &BTreeSet<(NodeId, NodeId, ControlFlowKind)>,
+        source: NodeId,
+        target: NodeId,
         kind: ControlFlowKind,
     ) {
         assert!(
-            edges.contains(&(source.to_string(), target.to_string(), kind)),
+            edges.contains(&(source, target, kind)),
             "missing CFG edge {source} -> {target} ({kind:?})"
         );
     }
@@ -3180,7 +3185,7 @@ mod tests {
         );
     }
 
-    fn statement_fact_with_text(graph: &ProgramSupergraph, text: &str) -> String {
+    fn statement_fact_with_text(graph: &ProgramSupergraph, text: &str) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3193,7 +3198,7 @@ mod tests {
                         .find(|candidate| {
                             candidate.node_id == cfg_node && candidate.span == node.span
                         })
-                        .map(|_| statement.statement_id.clone())
+                        .map(|_| statement.statement_id)
                 }
                 _ => None,
             })
@@ -3202,15 +3207,15 @@ mod tests {
 
     fn cfg_control_flow_facts(
         graph: &ProgramSupergraph,
-    ) -> Vec<(String, String, String, crate::supergraph::ControlFlow)> {
+    ) -> Vec<(NodeId, NodeId, EdgeId, crate::supergraph::ControlFlow)> {
         graph
             .control_flow_view()
-            .edges_for_callable("sample:<module>")
+            .edges_for_callable(sample_callable())
             .filter_map(|edge| match &edge.fact {
                 EdgeFact::ControlFlow(flow) => Some((
-                    edge.source_id.clone(),
-                    edge.target_id.clone()?,
-                    edge.edge_id.clone(),
+                    edge.source_id,
+                    edge.target_id?,
+                    edge.edge_id,
                     flow.clone(),
                 )),
                 _ => None,
@@ -3220,15 +3225,15 @@ mod tests {
 
     fn assert_edge_outcome(
         graph: &ProgramSupergraph,
-        source: &str,
-        target: &str,
+        source: NodeId,
+        target: NodeId,
         outcome: ControlFlowOutcome,
         arm_label: Option<&str>,
     ) {
         let matching = cfg_control_flow_facts(graph)
             .into_iter()
             .filter(|(edge_source, edge_target, _, flow)| {
-                edge_source == source && edge_target == target && flow.outcome == outcome
+                *edge_source == source && *edge_target == target && flow.outcome == outcome
             })
             .collect::<Vec<_>>();
         assert!(
@@ -3246,7 +3251,7 @@ mod tests {
         }
     }
 
-    fn cfg_statement_with_label(graph: &ProgramSupergraph, label: &str) -> String {
+    fn cfg_statement_with_label(graph: &ProgramSupergraph, label: &str) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3255,14 +3260,14 @@ mod tests {
                     if control.label == label
                         && control.role == crate::supergraph::ControlFlowNodeRole::Statement =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing CFG statement {label}"))
     }
 
-    fn cfg_condition_at(graph: &ProgramSupergraph, span: SourceSpan) -> String {
+    fn cfg_condition_at(graph: &ProgramSupergraph, span: SourceSpan) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3271,31 +3276,31 @@ mod tests {
                     if node.span == Some(span)
                         && control.role == crate::supergraph::ControlFlowNodeRole::Condition =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing CFG condition at {span:?}"))
     }
 
-    fn cfg_expression_control_with_label(graph: &ProgramSupergraph, label: &str) -> String {
+    fn cfg_expression_control_with_label(graph: &ProgramSupergraph, label: &str) -> NodeId {
         graph
             .control_flow_view()
-            .nodes_for_callable("sample:<module>")
+            .nodes_for_callable(sample_callable())
             .find_map(|node| match &node.fact {
                 NodeFact::ControlFlow(control)
                     if control.role == crate::supergraph::ControlFlowNodeRole::Condition
                         && control.semantic_kind.as_deref() == Some("BinaryOperator")
                         && control.label == label =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing expression-control CFG node {label}"))
     }
 
-    fn cfg_merge_at(graph: &ProgramSupergraph, span: SourceSpan, semantic_kind: &str) -> String {
+    fn cfg_merge_at(graph: &ProgramSupergraph, span: SourceSpan, semantic_kind: &str) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3305,17 +3310,17 @@ mod tests {
                         && control.role == crate::supergraph::ControlFlowNodeRole::Merge
                         && control.semantic_kind.as_deref() == Some(semantic_kind) =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("missing CFG merge {semantic_kind} at {span:?}"))
     }
 
-    fn assert_cfg_node_role(graph: &ProgramSupergraph, cfg_node_id: &str, expected_role: &str) {
+    fn assert_cfg_node_role(graph: &ProgramSupergraph, cfg_node_id: NodeId, expected_role: &str) {
         let actual = graph
             .control_flow_view()
-            .nodes_for_callable("sample:<module>")
+            .nodes_for_callable(sample_callable())
             .find_map(|node| match &node.fact {
                 NodeFact::ControlFlow(control) if control.cfg_node_id == cfg_node_id => {
                     Some(format!("{:?}", control.role))
@@ -3339,7 +3344,7 @@ mod tests {
         assert!(
             blocks.iter().all(|(node, block)| {
                 node.kind == crate::supergraph::NodeKind::BasicBlock
-                    && block.callable_id == "sample:<module>"
+                    && block.callable_id == sample_callable()
                     && !block.statement_ids.is_empty()
                     && block.entry_node_id.is_some()
                     && block.exit_node_id.is_some()
@@ -3356,7 +3361,7 @@ mod tests {
         );
     }
 
-    fn return_node(graph: &ProgramSupergraph) -> String {
+    fn return_node(graph: &ProgramSupergraph) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3364,18 +3369,18 @@ mod tests {
                 NodeFact::ControlFlow(control)
                     if control.role == crate::supergraph::ControlFlowNodeRole::Return =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })
             .expect("return CFG node")
     }
 
-    fn cfg_return_at(graph: &ProgramSupergraph, span: SourceSpan) -> String {
+    fn cfg_return_at(graph: &ProgramSupergraph, span: SourceSpan) -> NodeId {
         cfg_node_at_role(graph, span, crate::supergraph::ControlFlowNodeRole::Return)
     }
 
-    fn cfg_raise_at(graph: &ProgramSupergraph, span: SourceSpan) -> String {
+    fn cfg_raise_at(graph: &ProgramSupergraph, span: SourceSpan) -> NodeId {
         cfg_node_at_role(graph, span, crate::supergraph::ControlFlowNodeRole::Raise)
     }
 
@@ -3383,7 +3388,7 @@ mod tests {
         graph: &ProgramSupergraph,
         span: SourceSpan,
         role: crate::supergraph::ControlFlowNodeRole,
-    ) -> String {
+    ) -> NodeId {
         graph
             .nodes
             .iter()
@@ -3391,7 +3396,7 @@ mod tests {
                 NodeFact::ControlFlow(control)
                     if node.span == Some(span) && control.role == role =>
                 {
-                    Some(control.cfg_node_id.clone())
+                    Some(control.cfg_node_id)
                 }
                 _ => None,
             })

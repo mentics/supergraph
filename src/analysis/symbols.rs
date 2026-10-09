@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ast::{DefinitionAst, DefinitionKind as AstDefinitionKind, SourceSpan, UseAst};
+use crate::supergraph::ids::{IdMap, Tag, external_name_id};
 use crate::supergraph::{
     self as sg, BindingKind, BindingTarget, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind,
     ExternalTargetKind, NodeFact, NodeId, NodeKind, ProgramSupergraph, Resolution,
@@ -73,7 +74,7 @@ impl ScopedStatements {
         self.entries[first..]
             .iter()
             .find(|(candidate, _)| span_contains(*candidate, span))
-            .map(|(_, scope_id)| scope_id.clone())
+            .map(|(_, scope_id)| *scope_id)
     }
 }
 
@@ -94,7 +95,7 @@ impl ScopeTree {
         let mut order = scopes
             .iter()
             .enumerate()
-            .filter_map(|(position, scope)| Some((position, scope.span?, scope.scope_id.clone())))
+            .filter_map(|(position, scope)| Some((position, scope.span?, scope.scope_id)))
             .collect::<Vec<_>>();
         order.sort_by_key(|(position, span, _)| {
             (span.end_byte.saturating_sub(span.start_byte), *position)
@@ -141,15 +142,15 @@ impl ScopeTree {
 
 struct LexicalTables {
     scopes: BTreeMap<NodeId, ScopeInfo>,
-    scope_ids_by_artifact: HashMap<NodeId, Vec<NodeId>>,
-    scope_trees: HashMap<NodeId, ScopeTree>,
-    symbols_by_id: HashMap<NodeId, sg::Symbol>,
-    statements_by_callable: HashMap<NodeId, Vec<(SourceSpan, NodeId)>>,
+    scope_ids_by_artifact: IdMap<NodeId, Vec<NodeId>>,
+    scope_trees: IdMap<NodeId, ScopeTree>,
+    symbols_by_id: IdMap<NodeId, sg::Symbol>,
+    statements_by_callable: IdMap<NodeId, Vec<(SourceSpan, NodeId)>>,
     scoped_statements: ScopedStatements,
     callable_by_name: HashMap<String, (usize, NodeId)>,
-    callable_by_artifact_and_name: HashMap<(NodeId, String), NodeId>,
-    class_scope_by_parent: HashMap<NodeId, (usize, NodeId)>,
-    expression_positions: HashMap<(NodeId, SourceSpan), Vec<usize>>,
+    callable_by_artifact_and_name: IdMap<(NodeId, String), NodeId>,
+    class_scope_by_parent: IdMap<NodeId, (usize, NodeId)>,
+    expression_positions: IdMap<(NodeId, SourceSpan), Vec<usize>>,
     bindings_by_scope_name: BTreeMap<(NodeId, String), Vec<BindingInfo>>,
     symbols_by_binding: BTreeMap<NodeId, NodeId>,
     placeholder_symbols: BTreeSet<(NodeId, String, SourceSpan)>,
@@ -162,12 +163,12 @@ impl LexicalTables {
             .iter()
             .filter_map(|node| match &node.fact {
                 NodeFact::Scope(scope) => Some((
-                    scope.scope_id.clone(),
+                    scope.scope_id,
                     ScopeInfo {
-                        scope_id: scope.scope_id.clone(),
-                        parent_scope_id: scope.parent_scope_id.clone(),
-                        artifact_id: scope.artifact_id.clone(),
-                        owner_callable_id: scope.owner_callable_id.clone(),
+                        scope_id: scope.scope_id,
+                        parent_scope_id: scope.parent_scope_id,
+                        artifact_id: scope.artifact_id,
+                        owner_callable_id: scope.owner_callable_id,
                         kind: scope.kind,
                         span: scope.span,
                         binding_behavior: scope.binding_behavior,
@@ -177,12 +178,12 @@ impl LexicalTables {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let mut scope_ids_by_artifact = HashMap::<NodeId, Vec<NodeId>>::new();
+        let mut scope_ids_by_artifact = IdMap::<NodeId, Vec<NodeId>>::default();
         for scope in scopes.values() {
             scope_ids_by_artifact
-                .entry(scope.artifact_id.clone())
+                .entry(scope.artifact_id)
                 .or_default()
-                .push(scope.scope_id.clone());
+                .push(scope.scope_id);
         }
 
         let scope_trees = scope_ids_by_artifact
@@ -190,23 +191,23 @@ impl LexicalTables {
             .map(|(artifact_id, scope_ids)| {
                 let infos = scope_ids
                     .iter()
-                    .filter_map(|scope_id| scopes.get(scope_id))
+                    .filter_map(|scope_id| scopes.get(&scope_id))
                     .collect::<Vec<_>>();
-                (artifact_id.clone(), ScopeTree::build(&infos))
+                (*artifact_id, ScopeTree::build(&infos))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<IdMap<_, _>>();
 
         let mut tables = Self {
             scopes,
             scope_ids_by_artifact,
             scope_trees,
-            symbols_by_id: HashMap::new(),
-            statements_by_callable: HashMap::new(),
+            symbols_by_id: IdMap::default(),
+            statements_by_callable: IdMap::default(),
             scoped_statements: ScopedStatements::default(),
             callable_by_name: HashMap::new(),
-            callable_by_artifact_and_name: HashMap::new(),
-            class_scope_by_parent: HashMap::new(),
-            expression_positions: HashMap::new(),
+            callable_by_artifact_and_name: IdMap::default(),
+            class_scope_by_parent: IdMap::default(),
+            expression_positions: IdMap::default(),
             bindings_by_scope_name: BTreeMap::new(),
             symbols_by_binding: BTreeMap::new(),
             placeholder_symbols: BTreeSet::new(),
@@ -220,7 +221,7 @@ impl LexicalTables {
                             tables
                                 .class_scope_by_parent
                                 .entry(parent.clone())
-                                .or_insert_with(|| (position, scope.scope_id.clone()));
+                                .or_insert_with(|| (position, scope.scope_id));
                         }
                     }
                 }
@@ -229,22 +230,22 @@ impl LexicalTables {
                         tables
                             .callable_by_name
                             .entry(name.clone())
-                            .or_insert_with(|| (position, callable.callable_id.clone()));
+                            .or_insert_with(|| (position, callable.callable_id));
                         tables
                             .callable_by_artifact_and_name
-                            .entry((callable.artifact_id.clone(), name.clone()))
-                            .or_insert_with(|| callable.callable_id.clone());
+                            .entry((callable.artifact_id, name.clone()))
+                            .or_insert_with(|| callable.callable_id);
                     }
                 }
                 NodeFact::Statement(statement) => {
                     if let Some(span) = node.span {
                         tables
                             .statements_by_callable
-                            .entry(statement.callable_id.clone())
+                            .entry(statement.callable_id)
                             .or_default()
-                            .push((span, statement.statement_id.clone()));
+                            .push((span, statement.statement_id));
                         if let Some(scope_id) = &node.owner.scope_id {
-                            tables.scoped_statements.push(span, scope_id.clone());
+                            tables.scoped_statements.push(span, *scope_id);
                         }
                     }
                 }
@@ -252,14 +253,14 @@ impl LexicalTables {
                     if let Some(span) = node.span {
                         tables
                             .expression_positions
-                            .entry((expression.callable_id.clone(), span))
+                            .entry((expression.callable_id, span))
                             .or_default()
                             .push(position);
                     }
                 }
                 NodeFact::Binding(binding) => tables.register_binding(BindingInfo {
-                    binding_id: binding.binding_id.clone(),
-                    scope_id: binding.scope_id.clone(),
+                    binding_id: binding.binding_id,
+                    scope_id: binding.scope_id,
                     name: binding.name.clone(),
                     kind: binding.kind,
                     target: binding.target.clone(),
@@ -268,12 +269,12 @@ impl LexicalTables {
                 NodeFact::Symbol(symbol) => {
                     tables
                         .symbols_by_id
-                        .entry(symbol.symbol_id.clone())
+                        .entry(symbol.symbol_id)
                         .or_insert_with(|| symbol.clone());
                     if let Some(binding_id) = &symbol.binding_id {
                         tables
                             .symbols_by_binding
-                            .insert(binding_id.clone(), symbol.symbol_id.clone());
+                            .insert(*binding_id, symbol.symbol_id);
                     }
                 }
                 _ => {}
@@ -285,41 +286,41 @@ impl LexicalTables {
 
     fn register_binding(&mut self, binding: BindingInfo) {
         self.bindings_by_scope_name
-            .entry((binding.scope_id.clone(), binding.name.clone()))
+            .entry((binding.scope_id, binding.name.clone()))
             .or_default()
             .push(binding);
     }
 
-    fn scope_owner(&self, scope_id: &str) -> SourceOwnership {
+    fn scope_owner(&self, scope_id: NodeId) -> SourceOwnership {
         self.scopes
-            .get(scope_id)
+            .get(&scope_id)
             .map(|scope| SourceOwnership {
-                artifact_id: Some(scope.artifact_id.clone()),
-                scope_id: Some(scope.scope_id.clone()),
-                callable_id: scope.owner_callable_id.clone(),
+                artifact_id: Some(scope.artifact_id),
+                scope_id: Some(scope.scope_id),
+                callable_id: scope.owner_callable_id,
             })
             .unwrap_or_else(|| SourceOwnership {
                 artifact_id: None,
-                scope_id: Some(scope_id.to_string()),
+                scope_id: Some(scope_id),
                 callable_id: None,
             })
     }
 
-    fn binding_scope_for_span(&self, artifact_id: &str, span: SourceSpan) -> Option<NodeId> {
+    fn binding_scope_for_span(&self, artifact_id: NodeId, span: SourceSpan) -> Option<NodeId> {
         if let Some(scope_id) = self
             .scope_trees
-            .get(artifact_id)
+            .get(&artifact_id)
             .and_then(|tree| tree.innermost(span))
         {
-            return Some(self.normalize_binding_scope(scope_id));
+            return Some(self.normalize_binding_scope(*scope_id));
         }
         let artifact_scopes = self
             .scope_ids_by_artifact
-            .get(artifact_id)
+            .get(&artifact_id)
             .map(Vec::as_slice)
             .unwrap_or_default()
             .iter()
-            .filter_map(|scope_id| self.scopes.get(scope_id));
+            .filter_map(|scope_id| self.scopes.get(&scope_id));
         let nearest = artifact_scopes
             .clone()
             .filter(|scope| {
@@ -333,18 +334,18 @@ impl LexicalTables {
                     .map(|span| span.end_byte.saturating_sub(span.start_byte))
                     .unwrap_or(usize::MAX)
             })
-            .map(|scope| scope.scope_id.clone())
+            .map(|scope| scope.scope_id)
             .or_else(|| {
                 artifact_scopes
                     .clone()
                     .find(|scope| scope.kind == ScopeKind::Module)
-                    .map(|scope| scope.scope_id.clone())
+                    .map(|scope| scope.scope_id)
             })?;
-        Some(self.normalize_binding_scope(&nearest))
+        Some(self.normalize_binding_scope(nearest))
     }
 
-    fn normalize_binding_scope(&self, scope_id: &str) -> NodeId {
-        let mut current = scope_id.to_string();
+    fn normalize_binding_scope(&self, scope_id: NodeId) -> NodeId {
+        let mut current = scope_id;
         while let Some(scope) = self.scopes.get(&current) {
             if scope.binding_behavior != ScopeBindingBehavior::Transparent {
                 return current;
@@ -357,12 +358,12 @@ impl LexicalTables {
         current
     }
 
-    fn visible_bindings(&self, scope_id: &str, name: &str) -> Vec<BindingInfo> {
+    fn visible_bindings(&self, scope_id: NodeId, name: &str) -> Vec<BindingInfo> {
         let mut current = Some(self.normalize_binding_scope(scope_id));
         while let Some(scope_id) = current {
             if let Some(bindings) = self
                 .bindings_by_scope_name
-                .get(&(scope_id.clone(), name.to_string()))
+                .get(&(scope_id, name.to_string()))
             {
                 let mut bindings = bindings.clone();
                 bindings.sort_by(|left, right| {
@@ -378,24 +379,24 @@ impl LexicalTables {
             current = self
                 .scopes
                 .get(&scope_id)
-                .and_then(|scope| scope.parent_scope_id.clone());
+                .and_then(|scope| scope.parent_scope_id);
         }
         Vec::new()
     }
 
-    fn visible_binding(&self, scope_id: &str, name: &str) -> Option<BindingInfo> {
+    fn visible_binding(&self, scope_id: NodeId, name: &str) -> Option<BindingInfo> {
         self.visible_bindings(scope_id, name).into_iter().next()
     }
 
     fn binding_with_same_shape(
         &self,
-        scope_id: &str,
+        scope_id: NodeId,
         name: &str,
         kind: BindingKind,
         span: SourceSpan,
     ) -> Option<BindingInfo> {
         self.bindings_by_scope_name
-            .get(&(scope_id.to_string(), name.to_string()))
+            .get(&(scope_id, name.to_string()))
             .and_then(|bindings| {
                 bindings
                     .iter()
@@ -415,7 +416,7 @@ fn emit_external_targets_for_existing_bindings(graph: &mut ProgramSupergraph) {
         .nodes
         .iter()
         .filter_map(|node| match &node.fact {
-            NodeFact::ExternalTarget(target) => Some(target.external_target_id.clone()),
+            NodeFact::ExternalTarget(target) => Some(target.external_target_id),
             _ => None,
         })
         .collect::<BTreeSet<_>>();
@@ -424,8 +425,8 @@ fn emit_external_targets_for_existing_bindings(graph: &mut ProgramSupergraph) {
         .iter()
         .filter_map(|node| match &node.fact {
             NodeFact::Binding(binding) => match &binding.target {
-                BindingTarget::External(target_id) if !existing.contains(target_id) => {
-                    Some(target_id.clone())
+                BindingTarget::External(name) if !existing.contains(&external_name_id(name)) => {
+                    Some(name.clone())
                 }
                 _ => None,
             },
@@ -433,11 +434,12 @@ fn emit_external_targets_for_existing_bindings(graph: &mut ProgramSupergraph) {
         })
         .collect::<BTreeSet<_>>();
 
-    for target_id in targets {
+    for name in targets {
+        let target_id = external_name_id(&name);
         insert_node(
             graph,
             graph_node(
-                target_id.clone(),
+                target_id,
                 NodeKind::ExternalTarget,
                 SourceOwnership::default(),
                 None,
@@ -448,12 +450,12 @@ fn emit_external_targets_for_existing_bindings(graph: &mut ProgramSupergraph) {
                     "external-target",
                 ),
                 NodeFact::ExternalTarget(sg::ExternalTarget {
-                    external_target_id: target_id.clone(),
+                    external_target_id: target_id,
                     ecosystem: "unknown".to_string(),
                     package_name: None,
                     package_version: None,
                     module_path: None,
-                    qualified_name: target_id,
+                    qualified_name: name,
                     member_path: None,
                     target_kind: ExternalTargetKind::Unknown,
                     source: PRECISION.to_string(),
@@ -481,8 +483,8 @@ fn emit_declarations(
     tables: &mut LexicalTables,
     semantic: &SemanticCallable<'_>,
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
-    let artifact_id = semantic.artifact().artifact_id.as_str();
+    let callable_id = semantic.callable().callable_id;
+    let artifact_id = semantic.artifact().artifact_id;
 
     for definition in semantic
         .definitions()
@@ -491,11 +493,11 @@ fn emit_declarations(
     {
         let scope_id = binding_scope_for_definition(tables, semantic, definition)
             .or_else(|| tables.binding_scope_for_span(artifact_id, definition.source_span))
-            .unwrap_or_else(|| semantic.callable().scope_id.clone());
+            .unwrap_or_else(|| semantic.callable().scope_id);
         let binding_kind = binding_kind(definition.kind);
         let binding = tables
             .binding_with_same_shape(
-                &scope_id,
+                scope_id,
                 &definition.name,
                 binding_kind,
                 definition.source_span,
@@ -503,10 +505,10 @@ fn emit_declarations(
             .unwrap_or_else(|| {
                 let binding = BindingInfo {
                     binding_id: sg::binding_id(scope_id, &definition.name, definition.source_span),
-                    scope_id: scope_id.clone(),
+                    scope_id: scope_id,
                     name: definition.name.clone(),
                     kind: binding_kind,
-                    target: binding_target_for_definition(tables, definition, semantic, &scope_id),
+                    target: binding_target_for_definition(tables, definition, semantic, scope_id),
                     span: definition.source_span,
                 };
                 insert_binding(graph, tables, binding.clone());
@@ -515,8 +517,8 @@ fn emit_declarations(
 
         let symbol_id = ensure_symbol_for_binding(graph, tables, &binding);
         add_binding_resolves_to(graph, tables, &binding);
-        emit_definition_node(graph, tables, semantic, definition, &symbol_id, callable_id);
-        update_expression_symbol(graph, tables, callable_id, definition.source_span, &symbol_id);
+        emit_definition_node(graph, tables, semantic, definition, symbol_id, callable_id);
+        update_expression_symbol(graph, tables, callable_id, definition.source_span, symbol_id);
     }
 }
 
@@ -526,8 +528,8 @@ fn emit_uses(
     context: &SemanticContext<'_>,
     semantic: &SemanticCallable<'_>,
 ) {
-    let callable_id = semantic.callable().callable_id.as_str();
-    let artifact_id = semantic.artifact().artifact_id.as_str();
+    let callable_id = semantic.callable().callable_id;
+    let artifact_id = semantic.artifact().artifact_id;
 
     for use_fact in semantic
         .uses()
@@ -535,13 +537,13 @@ fn emit_uses(
         .filter(|use_fact| use_fact.owner_id == semantic.owner_id())
     {
         let scope_id = scope_for_use(tables, artifact_id, use_fact.source_span)
-            .unwrap_or_else(|| semantic.callable().scope_id.clone());
-        let visible_bindings = tables.visible_bindings(&scope_id, &use_fact.name);
+            .unwrap_or_else(|| semantic.callable().scope_id);
+        let visible_bindings = tables.visible_bindings(scope_id, &use_fact.name);
         let symbol_id = match visible_bindings.as_slice() {
             [] => ensure_placeholder_symbol(
                 graph,
                 tables,
-                &scope_id,
+                scope_id,
                 &use_fact.name,
                 use_fact.source_span,
                 symbol_kind_for_use(use_fact.kind),
@@ -551,7 +553,7 @@ fn emit_uses(
             _ => ensure_placeholder_symbol(
                 graph,
                 tables,
-                &scope_id,
+                scope_id,
                 &use_fact.name,
                 use_fact.source_span,
                 symbol_kind_for_use(use_fact.kind),
@@ -563,12 +565,12 @@ fn emit_uses(
         insert_node(
             graph,
             graph_node(
-                use_id.clone(),
+                use_id,
                 NodeKind::Use,
                 source_owner(
                     tables,
-                    &scope_id,
-                    Some(semantic.callable().callable_id.clone()),
+                    scope_id,
+                    Some(semantic.callable().callable_id),
                 ),
                 Some(use_fact.source_span),
                 Confidence::Exact,
@@ -579,17 +581,17 @@ fn emit_uses(
                     "lexical use fact",
                 ),
                 NodeFact::Use(sg::Use {
-                    use_id: use_id.clone(),
-                    callable_id: callable_id.to_string(),
-                    symbol_id: Some(symbol_id.clone()),
+                    use_id: use_id,
+                    callable_id,
+                    symbol_id: Some(symbol_id),
                     value_id: None,
                     kind: use_kind(use_fact.kind),
                     name: Some(use_fact.name.clone()),
                 }),
             ),
         );
-        add_uses_edge(graph, tables, context, semantic, use_fact, &use_id);
-        update_expression_symbol(graph, tables, callable_id, use_fact.source_span, &symbol_id);
+        add_uses_edge(graph, tables, context, semantic, use_fact, use_id);
+        update_expression_symbol(graph, tables, callable_id, use_fact.source_span, symbol_id);
     }
 }
 
@@ -601,7 +603,7 @@ fn emit_static_receiver_fields(
     let Some(class_scope_id) = class_scope_for_method(tables, semantic) else {
         return;
     };
-    let callable_id = semantic.callable().callable_id.as_str();
+    let callable_id = semantic.callable().callable_id;
 
     for field in semantic
         .field_accesses()
@@ -610,7 +612,7 @@ fn emit_static_receiver_fields(
         .filter(|field| is_static_receiver(field.object.as_deref()))
     {
         let binding = tables
-            .visible_binding(&class_scope_id, &field.field)
+            .visible_binding(class_scope_id, &field.field)
             .filter(|binding| binding.kind == BindingKind::Field)
             .unwrap_or_else(|| {
                 let binding = BindingInfo {
@@ -629,12 +631,12 @@ fn emit_static_receiver_fields(
         insert_node(
             graph,
             graph_node(
-                use_id.clone(),
+                use_id,
                 NodeKind::Use,
                 source_owner(
                     tables,
-                    &class_scope_id,
-                    Some(semantic.callable().callable_id.clone()),
+                    class_scope_id,
+                    Some(semantic.callable().callable_id),
                 ),
                 Some(field.source_span),
                 Confidence::Exact,
@@ -645,8 +647,8 @@ fn emit_static_receiver_fields(
                     "statically visible receiver field use",
                 ),
                 NodeFact::Use(sg::Use {
-                    use_id: use_id.clone(),
-                    callable_id: callable_id.to_string(),
+                    use_id: use_id,
+                    callable_id,
                     symbol_id: Some(symbol_id),
                     value_id: None,
                     kind: sg::UseKind::FieldRead,
@@ -664,12 +666,12 @@ fn emit_static_receiver_fields(
                     &field.field,
                 ),
                 EdgeKind::Uses,
-                semantic.callable().callable_id.clone(),
+                semantic.callable().callable_id,
                 use_id,
                 source_owner(
                     tables,
-                    &class_scope_id,
-                    Some(semantic.callable().callable_id.clone()),
+                    class_scope_id,
+                    Some(semantic.callable().callable_id),
                 ),
                 Some(field.source_span),
                 Confidence::Exact,
@@ -680,7 +682,7 @@ fn emit_static_receiver_fields(
                     "statically visible receiver field use edge",
                 ),
                 EdgeFact::Uses(sg::Uses {
-                    callable_id: semantic.callable().callable_id.clone(),
+                    callable_id: semantic.callable().callable_id,
                     use_id: sg::use_id(callable_id, &field.field, field.source_span),
                     name: field.field.clone(),
                 }),
@@ -690,19 +692,19 @@ fn emit_static_receiver_fields(
 }
 
 fn insert_binding(graph: &mut ProgramSupergraph, tables: &mut LexicalTables, binding: BindingInfo) {
-    let owner = tables.scope_owner(&binding.scope_id);
+    let owner = tables.scope_owner(binding.scope_id);
     insert_node(
         graph,
         graph_node(
-            binding.binding_id.clone(),
+            binding.binding_id,
             NodeKind::Binding,
             owner.clone(),
             Some(binding.span),
             binding_confidence(&binding.target),
             resolver_evidence("lexical binding fact", Some(binding.span), "binding"),
             NodeFact::Binding(sg::Binding {
-                binding_id: binding.binding_id.clone(),
-                scope_id: binding.scope_id.clone(),
+                binding_id: binding.binding_id,
+                scope_id: binding.scope_id,
                 name: binding.name.clone(),
                 kind: binding.kind,
                 target: binding.target.clone(),
@@ -715,15 +717,15 @@ fn insert_binding(graph: &mut ProgramSupergraph, tables: &mut LexicalTables, bin
         graph_edge(
             edge_id("binds", binding.scope_id, binding.binding_id, PRECISION),
             EdgeKind::Binds,
-            binding.scope_id.clone(),
-            binding.binding_id.clone(),
+            binding.scope_id,
+            binding.binding_id,
             owner,
             Some(binding.span),
             Confidence::Exact,
             resolver_evidence("scope owns lexical binding", Some(binding.span), "binding"),
             EdgeFact::Binds(sg::Binds {
-                scope_id: binding.scope_id.clone(),
-                binding_id: binding.binding_id.clone(),
+                scope_id: binding.scope_id,
+                binding_id: binding.binding_id,
             }),
         ),
     );
@@ -736,26 +738,26 @@ fn ensure_symbol_for_binding(
     binding: &BindingInfo,
 ) -> NodeId {
     if let Some(symbol_id) = tables.symbols_by_binding.get(&binding.binding_id) {
-        return symbol_id.clone();
+        return *symbol_id;
     }
     let symbol_id = sg::symbol_id(binding.scope_id, &binding.name, Some(binding.span));
     tables
         .symbols_by_id
-        .entry(symbol_id.clone())
+        .entry(symbol_id)
         .or_insert_with(|| sg::Symbol {
-            symbol_id: symbol_id.clone(),
-            scope_id: binding.scope_id.clone(),
+            symbol_id: symbol_id,
+            scope_id: binding.scope_id,
             name: binding.name.clone(),
             kind: symbol_kind_for_binding(binding.kind),
-            binding_id: Some(binding.binding_id.clone()),
+            binding_id: Some(binding.binding_id),
             resolution: resolution_from_target(&binding.target),
         });
     insert_node(
         graph,
         graph_node(
-            symbol_id.clone(),
+            symbol_id,
             NodeKind::Symbol,
-            tables.scope_owner(&binding.scope_id),
+            tables.scope_owner(binding.scope_id),
             Some(binding.span),
             binding_confidence(&binding.target),
             resolver_evidence(
@@ -764,39 +766,39 @@ fn ensure_symbol_for_binding(
                 "symbol",
             ),
             NodeFact::Symbol(sg::Symbol {
-                symbol_id: symbol_id.clone(),
-                scope_id: binding.scope_id.clone(),
+                symbol_id: symbol_id,
+                scope_id: binding.scope_id,
                 name: binding.name.clone(),
                 kind: symbol_kind_for_binding(binding.kind),
-                binding_id: Some(binding.binding_id.clone()),
+                binding_id: Some(binding.binding_id),
                 resolution: resolution_from_target(&binding.target),
             }),
         ),
     );
     tables
         .symbols_by_binding
-        .insert(binding.binding_id.clone(), symbol_id.clone());
+        .insert(binding.binding_id, symbol_id);
     symbol_id
 }
 
 fn ensure_placeholder_symbol(
     graph: &mut ProgramSupergraph,
     tables: &mut LexicalTables,
-    scope_id: &str,
+    scope_id: NodeId,
     name: &str,
     span: SourceSpan,
     kind: SymbolKind,
     resolution: Resolution,
 ) -> NodeId {
-    let key = (scope_id.to_string(), name.to_string(), span);
+    let key = (scope_id, name.to_string(), span);
     let symbol_id = sg::symbol_id(scope_id, name, Some(span));
     if tables.placeholder_symbols.insert(key) {
         tables
             .symbols_by_id
-            .entry(symbol_id.clone())
+            .entry(symbol_id)
             .or_insert_with(|| sg::Symbol {
-                symbol_id: symbol_id.clone(),
-                scope_id: scope_id.to_string(),
+                symbol_id: symbol_id,
+                scope_id,
                 name: name.to_string(),
                 kind,
                 binding_id: None,
@@ -805,7 +807,7 @@ fn ensure_placeholder_symbol(
         insert_node(
             graph,
             graph_node(
-                symbol_id.clone(),
+                symbol_id,
                 NodeKind::Symbol,
                 tables.scope_owner(scope_id),
                 Some(span),
@@ -816,8 +818,8 @@ fn ensure_placeholder_symbol(
                     "symbol",
                 ),
                 NodeFact::Symbol(sg::Symbol {
-                    symbol_id: symbol_id.clone(),
-                    scope_id: scope_id.to_string(),
+                    symbol_id: symbol_id,
+                    scope_id,
                     name: name.to_string(),
                     kind,
                     binding_id: None,
@@ -834,15 +836,15 @@ fn emit_definition_node(
     tables: &LexicalTables,
     semantic: &SemanticCallable<'_>,
     definition: &DefinitionAst,
-    symbol_id: &str,
-    callable_id: &str,
+    symbol_id: NodeId,
+    callable_id: NodeId,
 ) {
     let definition_id = sg::definition_id(callable_id, &definition.name, definition.source_span);
     let scope_id = tables
         .symbols_by_id
-        .get(symbol_id)
-        .map(|symbol| symbol.scope_id.clone())
-        .unwrap_or_else(|| semantic.callable().scope_id.clone());
+        .get(&symbol_id)
+        .map(|symbol| symbol.scope_id)
+        .unwrap_or_else(|| semantic.callable().scope_id);
     insert_node(
         graph,
         graph_node(
@@ -850,8 +852,8 @@ fn emit_definition_node(
             NodeKind::Definition,
             source_owner(
                 tables,
-                &scope_id,
-                Some(semantic.callable().callable_id.clone()),
+                scope_id,
+                Some(semantic.callable().callable_id),
             ),
             Some(definition.source_span),
             Confidence::Exact,
@@ -863,8 +865,8 @@ fn emit_definition_node(
             ),
             NodeFact::Definition(sg::Definition {
                 definition_id: definition_id.clone(),
-                callable_id: callable_id.to_string(),
-                symbol_id: Some(symbol_id.to_string()),
+                callable_id,
+                symbol_id: Some(symbol_id),
                 value_id: None,
                 kind: definition_kind(definition.kind),
                 name: Some(definition.name.clone()),
@@ -872,7 +874,7 @@ fn emit_definition_node(
         ),
     );
     let source_id = containing_statement_id(tables, semantic, definition.source_span)
-        .unwrap_or_else(|| semantic.callable().callable_id.clone());
+        .unwrap_or_else(|| semantic.callable().callable_id);
     insert_edge(
         graph,
         graph_edge(
@@ -882,8 +884,8 @@ fn emit_definition_node(
             definition_id.clone(),
             source_owner(
                 tables,
-                &scope_id,
-                Some(semantic.callable().callable_id.clone()),
+                scope_id,
+                Some(semantic.callable().callable_id),
             ),
             Some(definition.source_span),
             Confidence::Exact,
@@ -894,7 +896,7 @@ fn emit_definition_node(
                 "definition binds lexical symbol",
             ),
             EdgeFact::Defines(sg::Defines {
-                callable_id: callable_id.to_string(),
+                callable_id,
                 definition_id,
                 name: definition.name.clone(),
             }),
@@ -908,27 +910,27 @@ fn add_uses_edge(
     context: &SemanticContext<'_>,
     semantic: &SemanticCallable<'_>,
     use_fact: &UseAst,
-    use_id: &str,
+    use_id: NodeId,
 ) {
     let scope_id = tables
         .scoped_statements
         .first_scope_containing(use_fact.source_span)
-        .or_else(|| Some(semantic.callable().scope_id.clone()));
+        .or_else(|| Some(semantic.callable().scope_id));
     let owner = SourceOwnership {
-        artifact_id: Some(semantic.artifact().artifact_id.clone()),
+        artifact_id: Some(semantic.artifact().artifact_id),
         scope_id,
-        callable_id: Some(semantic.callable().callable_id.clone()),
+        callable_id: Some(semantic.callable().callable_id),
     };
     let source_id = containing_statement_id(tables, semantic, use_fact.source_span)
         .or_else(|| containing_call_site_id(context, semantic, use_fact.source_span))
-        .unwrap_or_else(|| semantic.callable().callable_id.clone());
+        .unwrap_or_else(|| semantic.callable().callable_id);
     insert_edge(
         graph,
         graph_edge(
             edge_id("uses", source_id, use_id, &use_fact.name),
             EdgeKind::Uses,
             source_id,
-            use_id.to_string(),
+            use_id,
             owner,
             Some(use_fact.source_span),
             Confidence::Exact,
@@ -939,8 +941,8 @@ fn add_uses_edge(
                 "use references lexical symbol",
             ),
             EdgeFact::Uses(sg::Uses {
-                callable_id: semantic.callable().callable_id.clone(),
-                use_id: use_id.to_string(),
+                callable_id: semantic.callable().callable_id,
+                use_id: use_id,
                 name: use_fact.name.clone(),
             }),
         ),
@@ -960,14 +962,14 @@ fn add_binding_resolves_to(
         graph_edge(
             edge_id("resolves-to", binding.binding_id, target_id, PRECISION),
             EdgeKind::ResolvesTo,
-            binding.binding_id.clone(),
-            target_id.clone(),
-            tables.scope_owner(&binding.scope_id),
+            binding.binding_id,
+            target_id,
+            tables.scope_owner(binding.scope_id),
             Some(binding.span),
             binding_confidence(&binding.target),
             resolver_evidence("binding has lexical target", Some(binding.span), "binding"),
             EdgeFact::ResolvesTo(sg::ResolvesTo {
-                binding_id: binding.binding_id.clone(),
+                binding_id: binding.binding_id,
                 target_id,
                 resolution: resolution_from_target(&binding.target),
             }),
@@ -980,7 +982,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
         .nodes
         .iter()
         .filter_map(|node| match &node.fact {
-            NodeFact::Binding(binding) => Some((binding.binding_id.clone(), binding.clone())),
+            NodeFact::Binding(binding) => Some((binding.binding_id, binding.clone())),
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
@@ -1005,7 +1007,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
         .iter()
         .filter_map(|node| match &node.fact {
             NodeFact::CallSite(call_site) => {
-                Some((call_site.call_site_id.clone(), call_site.clone()))
+                Some((call_site.call_site_id, call_site.clone()))
             }
             _ => None,
         })
@@ -1024,8 +1026,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             if let Some(binding) = bindings.get(binding_id) {
                 add_resolution_edge(
                     graph,
-                    &symbol.symbol_id,
-                    &binding.binding_id,
+                    symbol.symbol_id,
+                    binding.binding_id,
                     symbol.resolution,
                     owner.clone(),
                     span,
@@ -1033,7 +1035,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 );
                 add_binding_target_resolution_edges(
                     graph,
-                    &symbol.symbol_id,
+                    symbol.symbol_id,
                     binding,
                     owner,
                     span,
@@ -1041,7 +1043,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 );
             }
         } else {
-            let candidate_bindings = tables.visible_bindings(&symbol.scope_id, &symbol.name);
+            let candidate_bindings = tables.visible_bindings(symbol.scope_id, &symbol.name);
             if candidate_bindings.is_empty() {
                 let target_id = ensure_resolution_placeholder_target(
                     graph,
@@ -1052,8 +1054,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 );
                 add_resolution_edge(
                     graph,
-                    &symbol.symbol_id,
-                    &target_id,
+                    symbol.symbol_id,
+                    target_id,
                     symbol.resolution,
                     owner,
                     span,
@@ -1063,8 +1065,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 for binding in candidate_bindings {
                     add_resolution_edge(
                         graph,
-                        &symbol.symbol_id,
-                        &binding.binding_id,
+                        symbol.symbol_id,
+                        binding.binding_id,
                         Resolution::Ambiguous,
                         owner.clone(),
                         span,
@@ -1086,8 +1088,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             );
             add_resolution_edge(
                 graph,
-                &use_fact.use_id,
-                &target_id,
+                use_fact.use_id,
+                target_id,
                 Resolution::Unresolved,
                 owner,
                 span,
@@ -1095,7 +1097,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             );
             continue;
         };
-        let symbol = tables.symbols_by_id.get(symbol_id).cloned();
+        let symbol = tables.symbols_by_id.get(&symbol_id).cloned();
         let Some(symbol) = symbol else {
             continue;
         };
@@ -1103,8 +1105,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             if let Some(binding) = bindings.get(binding_id) {
                 add_resolution_edge(
                     graph,
-                    &use_fact.use_id,
-                    &binding.binding_id,
+                    use_fact.use_id,
+                    binding.binding_id,
                     symbol.resolution,
                     owner.clone(),
                     span,
@@ -1112,7 +1114,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 );
                 add_binding_target_resolution_edges(
                     graph,
-                    &use_fact.use_id,
+                    use_fact.use_id,
                     binding,
                     owner,
                     span,
@@ -1123,7 +1125,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             let candidate_bindings = use_fact
                 .name
                 .as_deref()
-                .map(|name| tables.visible_bindings(&symbol.scope_id, name))
+                .map(|name| tables.visible_bindings(symbol.scope_id, name))
                 .unwrap_or_default();
             if candidate_bindings.is_empty() {
                 let target_id = ensure_resolution_placeholder_target(
@@ -1135,8 +1137,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 );
                 add_resolution_edge(
                     graph,
-                    &use_fact.use_id,
-                    &target_id,
+                    use_fact.use_id,
+                    target_id,
                     symbol.resolution,
                     owner,
                     span,
@@ -1146,8 +1148,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
                 for binding in candidate_bindings {
                     add_resolution_edge(
                         graph,
-                        &use_fact.use_id,
-                        &binding.binding_id,
+                        use_fact.use_id,
+                        binding.binding_id,
                         Resolution::Ambiguous,
                         owner.clone(),
                         span,
@@ -1165,7 +1167,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
         let target_id = calls
             .callee_callable_id
             .clone()
-            .or_else(|| calls.external_target_id.clone())
+            .or_else(|| calls.external_target_id)
             .unwrap_or_else(|| {
                 ensure_resolution_placeholder_target(
                     graph,
@@ -1180,8 +1182,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
             });
         add_resolution_edge(
             graph,
-            &calls.call_site_id,
-            &target_id,
+            calls.call_site_id,
+            target_id,
             calls.resolution,
             owner.clone(),
             span,
@@ -1191,8 +1193,8 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
         if let Some(binding) = possible_dynamic_callee_binding(tables, call_site) {
             add_resolution_edge(
                 graph,
-                &calls.call_site_id,
-                &binding.binding_id,
+                calls.call_site_id,
+                binding.binding_id,
                 Resolution::Possible,
                 owner,
                 span,
@@ -1204,7 +1206,7 @@ fn emit_resolution_edges(graph: &mut ProgramSupergraph, tables: &LexicalTables) 
 
 fn add_binding_target_resolution_edges(
     graph: &mut ProgramSupergraph,
-    source_id: &str,
+    source_id: NodeId,
     binding: &sg::Binding,
     owner: SourceOwnership,
     span: Option<SourceSpan>,
@@ -1216,7 +1218,7 @@ fn add_binding_target_resolution_edges(
     add_resolution_edge(
         graph,
         source_id,
-        &target_id,
+        target_id,
         resolution_from_target(&binding.target),
         owner,
         span,
@@ -1226,8 +1228,8 @@ fn add_binding_target_resolution_edges(
 
 fn add_resolution_edge(
     graph: &mut ProgramSupergraph,
-    source_id: &str,
-    target_id: &str,
+    source_id: NodeId,
+    target_id: NodeId,
     resolution: Resolution,
     owner: SourceOwnership,
     span: Option<SourceSpan>,
@@ -1243,15 +1245,15 @@ fn add_resolution_edge(
                 &format!("{RESOLUTION_PRECISION}:{resolution:?}"),
             ),
             EdgeKind::ResolvesTo,
-            source_id.to_string(),
-            target_id.to_string(),
+            source_id,
+            target_id,
             owner,
             span,
             confidence_from_resolution(resolution),
             resolver_evidence(summary, span, "resolution"),
             EdgeFact::ResolvesTo(sg::ResolvesTo {
-                binding_id: source_id.to_string(),
-                target_id: target_id.to_string(),
+                binding_id: source_id,
+                target_id: target_id,
                 resolution,
             }),
         ),
@@ -1266,8 +1268,8 @@ fn ensure_resolution_placeholder_target(
     span: Option<SourceSpan>,
 ) -> NodeId {
     let target_id = sg::stable_id(
-        "external-target",
-        &[
+        Tag::ExternalTarget,
+        crate::id_parts![
             RESOLUTION_PRECISION,
             &format!("{resolution:?}"),
             name,
@@ -1277,14 +1279,14 @@ fn ensure_resolution_placeholder_target(
     insert_node(
         graph,
         graph_node(
-            target_id.clone(),
+            target_id,
             NodeKind::ExternalTarget,
             owner,
             span,
             confidence_from_resolution(resolution),
             resolver_evidence("resolution placeholder target", span, "external-target"),
             NodeFact::ExternalTarget(sg::ExternalTarget {
-                external_target_id: target_id.clone(),
+                external_target_id: target_id,
                 ecosystem: "unknown".to_string(),
                 package_name: None,
                 package_version: None,
@@ -1306,28 +1308,28 @@ fn possible_dynamic_callee_binding(
     if call_site.callee_expression.contains('.') {
         return None;
     }
-    let scope_id = tables.binding_scope_for_span(&call_site.artifact_id, call_site.span)?;
+    let scope_id = tables.binding_scope_for_span(call_site.artifact_id, call_site.span)?;
     tables
-        .visible_binding(&scope_id, &call_site.callee_expression)
+        .visible_binding(scope_id, &call_site.callee_expression)
         .filter(|binding| matches!(binding.target, BindingTarget::Value(_)))
 }
 
 fn update_expression_symbol(
     graph: &mut ProgramSupergraph,
     tables: &LexicalTables,
-    callable_id: &str,
+    callable_id: NodeId,
     span: SourceSpan,
-    symbol_id: &str,
+    symbol_id: NodeId,
 ) {
     let Some(positions) = tables
         .expression_positions
-        .get(&(callable_id.to_string(), span))
+        .get(&(callable_id, span))
     else {
         return;
     };
     for position in positions {
         if let NodeFact::Expression(expression) = &mut graph.nodes[*position].fact {
-            expression.symbol_id = Some(symbol_id.to_string());
+            expression.symbol_id = Some(symbol_id);
         }
     }
 }
@@ -1338,17 +1340,17 @@ fn binding_scope_for_definition(
     definition: &DefinitionAst,
 ) -> Option<NodeId> {
     if definition.kind == AstDefinitionKind::Parameter {
-        return Some(semantic.callable().scope_id.clone());
+        return Some(semantic.callable().scope_id);
     }
     if definition.kind == AstDefinitionKind::Field {
         if let Some(class_scope_id) = class_scope_for_method(tables, semantic) {
             return Some(class_scope_id);
         }
     }
-    tables.binding_scope_for_span(&semantic.artifact().artifact_id, definition.source_span)
+    tables.binding_scope_for_span(semantic.artifact().artifact_id, definition.source_span)
 }
 
-fn scope_for_use(tables: &LexicalTables, artifact_id: &str, span: SourceSpan) -> Option<NodeId> {
+fn scope_for_use(tables: &LexicalTables, artifact_id: NodeId, span: SourceSpan) -> Option<NodeId> {
     tables.binding_scope_for_span(artifact_id, span)
 }
 
@@ -1359,11 +1361,11 @@ fn class_scope_for_method(
     tables
         .scopes
         .get(&semantic.callable().scope_id)
-        .and_then(|scope| scope.parent_scope_id.clone())
+        .and_then(|scope| scope.parent_scope_id)
         .filter(|scope_id| {
             tables
                 .scopes
-                .get(scope_id)
+                .get(&scope_id)
                 .is_some_and(|scope| scope.kind == ScopeKind::Class)
         })
 }
@@ -1372,7 +1374,7 @@ fn binding_target_for_definition(
     tables: &LexicalTables,
     definition: &DefinitionAst,
     semantic: &SemanticCallable<'_>,
-    scope_id: &str,
+    scope_id: NodeId,
 ) -> BindingTarget {
     match definition.kind {
         AstDefinitionKind::Class => callable_or_scope_target(tables, &definition.name, scope_id)
@@ -1388,19 +1390,19 @@ fn binding_target_for_definition(
 fn callable_or_scope_target(
     tables: &LexicalTables,
     name: &str,
-    scope_id: &str,
+    scope_id: NodeId,
 ) -> Option<BindingTarget> {
     // The first matching node in graph order wins, whichever kind it is.
-    let class_scope = tables.class_scope_by_parent.get(scope_id);
+    let class_scope = tables.class_scope_by_parent.get(&scope_id);
     let callable = tables.callable_by_name.get(name);
     match (class_scope, callable) {
         (Some((scope_position, scope_id)), Some((callable_position, _)))
             if scope_position < callable_position =>
         {
-            Some(BindingTarget::Class(scope_id.clone()))
+            Some(BindingTarget::Class(scope_id.to_string()))
         }
-        (_, Some((_, callable_id))) => Some(BindingTarget::Callable(callable_id.clone())),
-        (Some((_, scope_id)), None) => Some(BindingTarget::Class(scope_id.clone())),
+        (_, Some((_, callable_id))) => Some(BindingTarget::Callable(*callable_id)),
+        (Some((_, scope_id)), None) => Some(BindingTarget::Class(scope_id.to_string())),
         (None, None) => None,
     }
 }
@@ -1412,23 +1414,23 @@ fn callable_target(
 ) -> Option<BindingTarget> {
     tables
         .callable_by_artifact_and_name
-        .get(&(semantic.artifact().artifact_id.clone(), name.to_string()))
-        .map(|callable_id| BindingTarget::Callable(callable_id.clone()))
+        .get(&(semantic.artifact().artifact_id, name.to_string()))
+        .map(|callable_id| BindingTarget::Callable(*callable_id))
 }
 
 fn target_node_id(target: &BindingTarget) -> Option<NodeId> {
     match target {
-        BindingTarget::Callable(target)
-        | BindingTarget::Class(target)
-        | BindingTarget::Module(target)
-        | BindingTarget::External(target) => Some(target.clone()),
+        BindingTarget::Callable(target) => Some(*target),
+        // Class targets created here carry the class scope id's text.
+        BindingTarget::Class(text) | BindingTarget::Module(text) => text.parse().ok(),
+        BindingTarget::External(name) => Some(external_name_id(name)),
         BindingTarget::Value(_) | BindingTarget::Unresolved(_) => None,
     }
 }
 
 fn source_owner(
     tables: &LexicalTables,
-    scope_id: &str,
+    scope_id: NodeId,
     callable_id: Option<NodeId>,
 ) -> SourceOwnership {
     let mut owner = tables.scope_owner(scope_id);
@@ -1448,7 +1450,7 @@ fn containing_statement_id(
         .get(&semantic.callable().callable_id)?
         .iter()
         .find(|(statement_span, _)| span_contains(*statement_span, span))
-        .map(|(_, statement_id)| statement_id.clone())
+        .map(|(_, statement_id)| *statement_id)
 }
 
 fn containing_call_site_id(
@@ -1461,7 +1463,7 @@ fn containing_call_site_id(
         .iter()
         .filter(|call| span_contains(call.source_span, span))
         .filter_map(|call| context.call_site_for(semantic.callable().callable_id, call))
-        .map(|call_site| call_site.call_site_id.clone())
+        .map(|call_site| call_site.call_site_id)
         .next()
 }
 
@@ -1564,7 +1566,7 @@ fn parser_evidence(
     vec![Evidence {
         kind: EvidenceKind::Parser,
         summary: summary.to_string(),
-        source_id: Some(semantic.artifact().artifact_id.clone()),
+        source_id: Some(semantic.artifact().artifact_id),
         source_span: span,
         content_hash: None,
         syntax: Some(SyntaxReference {
@@ -1599,7 +1601,8 @@ mod tests {
         ProjectAst, StatementAst, StatementKind as AstStatementKind, SymbolAst,
         SymbolKind as AstSymbolKind, UseAst, UseKind,
     };
-    use crate::supergraph::{CallGraphView, ScopeBindingBehavior};
+    use crate::supergraph::ids::callable_id_from_text;
+    use crate::supergraph::{CallGraphView, EdgeId, ScopeBindingBehavior};
 
     #[test]
     fn sg030_builds_python_lexical_symbol_tables() {
@@ -1626,7 +1629,7 @@ mod tests {
         );
 
         let branch_binding = binding_named(&graph, "branch_value", BindingKind::Assignment);
-        let branch_scope = scope(&graph, &branch_binding.scope_id);
+        let branch_scope = scope(&graph, branch_binding.scope_id);
         assert_ne!(
             branch_scope.binding_behavior,
             ScopeBindingBehavior::Transparent,
@@ -1650,7 +1653,7 @@ mod tests {
         );
 
         let block_binding = binding_named(&graph, "blockOnly", BindingKind::Assignment);
-        let block_scope = scope(&graph, &block_binding.scope_id);
+        let block_scope = scope(&graph, block_binding.scope_id);
         assert_eq!(
             block_scope.binding_behavior,
             ScopeBindingBehavior::Boundary,
@@ -1675,8 +1678,8 @@ mod tests {
         let local_binding = binding_named(&graph, "local", BindingKind::Assignment);
         assert_resolution_edge(
             &graph,
-            &local_use.use_id,
-            &local_binding.binding_id,
+            local_use.use_id,
+            local_binding.binding_id,
             Resolution::Exact,
         );
 
@@ -1684,15 +1687,15 @@ mod tests {
         let field_binding = binding_named(&graph, "field", BindingKind::Field);
         assert_resolution_edge(
             &graph,
-            &field_use.use_id,
-            &field_binding.binding_id,
+            field_use.use_id,
+            field_binding.binding_id,
             Resolution::Exact,
         );
 
         let external_call = call_site_named(&graph, "LocalClient");
         assert_source_resolves_to_kind(
             &graph,
-            &external_call.call_site_id,
+            external_call.call_site_id,
             NodeKind::ExternalTarget,
             Resolution::External,
         );
@@ -1700,21 +1703,21 @@ mod tests {
         let dynamic_call = call_site_named(&graph, "local");
         assert_resolution_edge(
             &graph,
-            &dynamic_call.call_site_id,
-            &local_binding.binding_id,
+            dynamic_call.call_site_id,
+            local_binding.binding_id,
             Resolution::Possible,
         );
 
         let unresolved_call = call_site_named(&graph, "missing_call");
         assert_source_resolves_to_kind(
             &graph,
-            &unresolved_call.call_site_id,
+            unresolved_call.call_site_id,
             NodeKind::ExternalTarget,
             Resolution::Unresolved,
         );
 
         let ambiguous_use = use_named(&graph, "ambiguous");
-        let ambiguous_edges = resolution_edges_from(&graph, &ambiguous_use.use_id)
+        let ambiguous_edges = resolution_edges_from(&graph, ambiguous_use.use_id)
             .into_iter()
             .filter(|edge| match &edge.fact {
                 EdgeFact::ResolvesTo(resolves) => resolves.resolution == Resolution::Ambiguous,
@@ -1737,7 +1740,7 @@ mod tests {
         let method_call = call_site_named(&graph, "this.handle");
         assert_source_resolves_to_kind(
             &graph,
-            &method_call.call_site_id,
+            method_call.call_site_id,
             NodeKind::Callable,
             Resolution::Exact,
         );
@@ -1746,8 +1749,8 @@ mod tests {
         let dynamic_call = call_site_named(&graph, "blockOnly");
         assert_resolution_edge(
             &graph,
-            &dynamic_call.call_site_id,
-            &block_binding.binding_id,
+            dynamic_call.call_site_id,
+            block_binding.binding_id,
             Resolution::Possible,
         );
 
@@ -1755,15 +1758,15 @@ mod tests {
         let field_binding = binding_named(&graph, "prop", BindingKind::Field);
         assert_resolution_edge(
             &graph,
-            &field_use.use_id,
-            &field_binding.binding_id,
+            field_use.use_id,
+            field_binding.binding_id,
             Resolution::Exact,
         );
 
         let unresolved_call = call_site_named(&graph, "unknownThing");
         assert_source_resolves_to_kind(
             &graph,
-            &unresolved_call.call_site_id,
+            unresolved_call.call_site_id,
             NodeKind::ExternalTarget,
             Resolution::Unresolved,
         );
@@ -1778,7 +1781,7 @@ mod tests {
         let external_call = call_site_named(&graph, "LocalClient");
         assert_call_edge_to_kind(
             &graph,
-            &external_call.call_site_id,
+            external_call.call_site_id,
             NodeKind::ExternalTarget,
             Resolution::External,
         );
@@ -1786,7 +1789,7 @@ mod tests {
         let dynamic_call = call_site_named(&graph, "local");
         assert_targetless_call_edge(
             &graph,
-            &dynamic_call.call_site_id,
+            dynamic_call.call_site_id,
             "local",
             Resolution::Possible,
         );
@@ -1794,14 +1797,14 @@ mod tests {
         let unresolved_call = call_site_named(&graph, "missing_call");
         assert_targetless_call_edge(
             &graph,
-            &unresolved_call.call_site_id,
+            unresolved_call.call_site_id,
             "missing_call",
             Resolution::Unresolved,
         );
 
         let view = CallGraphView::new(&graph);
         assert!(
-            view.calls_from_call_site(&dynamic_call.call_site_id)
+            view.calls_from_call_site(dynamic_call.call_site_id)
                 .iter()
                 .any(|edge| edge.target_id.is_none()),
             "call graph view should answer call-site queries for possible dynamic calls"
@@ -1815,28 +1818,28 @@ mod tests {
         assert_all_calls_are_call_site_sourced(&graph);
 
         let method_call = call_site_named(&graph, "this.handle");
-        let method_edges = call_edges_from(&graph, &method_call.call_site_id);
+        let method_edges = call_edges_from(&graph, method_call.call_site_id);
         let local_method_edge = method_edges
             .iter()
             .find(|edge| {
                 matches!(
                     &edge.fact,
                     EdgeFact::Calls(calls)
-                        if calls.callee_callable_id.as_deref() == Some("sample.Exported.handle")
+                        if calls.callee_callable_id == Some(callable_id_from_text("sample.Exported.handle"))
                             && calls.resolution == Resolution::Exact
                 )
             })
             .expect("method call should lower to local callable Calls edge");
         assert_eq!(local_method_edge.source_id, method_call.call_site_id);
         assert_eq!(
-            local_method_edge.target_id.as_deref(),
-            Some("sample.Exported.handle")
+            local_method_edge.target_id,
+            Some(callable_id_from_text("sample.Exported.handle"))
         );
 
         let dynamic_call = call_site_named(&graph, "blockOnly");
         assert_targetless_call_edge(
             &graph,
-            &dynamic_call.call_site_id,
+            dynamic_call.call_site_id,
             "blockOnly",
             Resolution::Possible,
         );
@@ -1844,7 +1847,7 @@ mod tests {
         let unresolved_call = call_site_named(&graph, "unknownThing");
         assert_targetless_call_edge(
             &graph,
-            &unresolved_call.call_site_id,
+            unresolved_call.call_site_id,
             "unknownThing",
             Resolution::Unresolved,
         );
@@ -1855,43 +1858,43 @@ mod tests {
             crate::ast::CallContext::ModuleInitializer
         );
         assert_eq!(
-            module_local_call.enclosing_callable_id, "sample:<module>",
+            module_local_call.enclosing_callable_id, callable_id_from_text("sample:<module>"),
             "top-level TypeScript local calls should be owned by the module initializer"
         );
         assert_call_edge_to_target(
             &graph,
-            &module_local_call.call_site_id,
-            "sample.initialize",
+            module_local_call.call_site_id,
+            callable_id_from_text("sample.initialize"),
             Resolution::Exact,
         );
 
         let module_external_call = call_site_named(&graph, "externalBoot");
         assert_eq!(
-            module_external_call.enclosing_callable_id, "sample:<module>",
+            module_external_call.enclosing_callable_id, callable_id_from_text("sample:<module>"),
             "top-level TypeScript external calls should be owned by the module initializer"
         );
         assert_call_edge_to_kind(
             &graph,
-            &module_external_call.call_site_id,
+            module_external_call.call_site_id,
             NodeKind::ExternalTarget,
             Resolution::External,
         );
 
         let module_unresolved_call = call_site_named(&graph, "missingBoot");
         assert_eq!(
-            module_unresolved_call.enclosing_callable_id, "sample:<module>",
+            module_unresolved_call.enclosing_callable_id, callable_id_from_text("sample:<module>"),
             "top-level TypeScript unresolved calls should be owned by the module initializer"
         );
         assert_targetless_call_edge(
             &graph,
-            &module_unresolved_call.call_site_id,
+            module_unresolved_call.call_site_id,
             "missingBoot",
             Resolution::Unresolved,
         );
 
         let view = CallGraphView::new(&graph);
         assert_eq!(
-            view.calls_from_caller_to_callee("sample.Exported.handle", "sample.Exported.handle")
+            view.calls_from_caller_to_callee(callable_id_from_text("sample.Exported.handle"), callable_id_from_text("sample.Exported.handle"))
                 .len(),
             1,
             "call graph view should answer caller-to-callee from canonical Calls edges"
@@ -1901,7 +1904,7 @@ mod tests {
             graph
                 .indexes
                 .calls_by_caller
-                .get("sample.Exported.handle")
+                .get(&callable_id_from_text("sample.Exported.handle"))
                 .is_some_and(|edges| edges.contains(&local_method_edge.edge_id)),
             "caller index should include the canonical self-call edge"
         );
@@ -1909,7 +1912,7 @@ mod tests {
             graph
                 .indexes
                 .calls_by_concrete_target
-                .get("sample.Exported.handle")
+                .get(&callable_id_from_text("sample.Exported.handle"))
                 .is_some_and(|edges| edges.contains(&local_method_edge.edge_id)),
             "concrete-target index should include the canonical self-call edge"
         );
@@ -1921,24 +1924,24 @@ mod tests {
         assert_all_calls_are_call_site_sourced(&python_graph);
 
         let python_view = CallGraphView::new(&python_graph);
-        let python_caller = "sample.Worker.run";
+        let python_caller = callable_id_from_text("sample.Worker.run");
 
         let external_call = call_site_named(&python_graph, "LocalClient");
-        let external_edge = call_edges_from(&python_graph, &external_call.call_site_id)
+        let external_edge = call_edges_from(&python_graph, external_call.call_site_id)
             .into_iter()
             .find(|edge| matches!(&edge.fact, EdgeFact::Calls(calls) if calls.resolution == Resolution::External))
             .expect("external call edge");
-        let external_target = external_edge.target_id.as_deref().expect("external target");
+        let external_target = external_edge.target_id.expect("external target");
         assert_caller_to_target_summary(
             &python_graph,
             &python_view,
             python_caller,
             external_target,
-            &external_edge.edge_id,
+            external_edge.edge_id,
         );
 
         let dynamic_call = call_site_named(&python_graph, "local");
-        let dynamic_edge = call_edges_from(&python_graph, &dynamic_call.call_site_id)
+        let dynamic_edge = call_edges_from(&python_graph, dynamic_call.call_site_id)
             .into_iter()
             .find(|edge| {
                 edge.target_id.is_none()
@@ -1952,12 +1955,12 @@ mod tests {
             .expect("possible dynamic call edge");
         assert_call_site_index_entry(
             &python_graph,
-            &dynamic_call.call_site_id,
-            &dynamic_edge.edge_id,
+            dynamic_call.call_site_id,
+            dynamic_edge.edge_id,
         );
 
         let unresolved_call = call_site_named(&python_graph, "missing_call");
-        let unresolved_edge = call_edges_from(&python_graph, &unresolved_call.call_site_id)
+        let unresolved_edge = call_edges_from(&python_graph, unresolved_call.call_site_id)
             .into_iter()
             .find(|edge| {
                 edge.target_id.is_none()
@@ -1971,8 +1974,8 @@ mod tests {
             .expect("unresolved call edge");
         assert_call_site_index_entry(
             &python_graph,
-            &unresolved_call.call_site_id,
-            &unresolved_edge.edge_id,
+            unresolved_call.call_site_id,
+            unresolved_edge.edge_id,
         );
 
         let typescript_graph = build_typescript_supergraph(&typescript_project());
@@ -1980,7 +1983,7 @@ mod tests {
 
         let typescript_view = CallGraphView::new(&typescript_graph);
         let local_edges = typescript_view
-            .calls_from_caller_to_callee("sample.Exported.handle", "sample.Exported.handle");
+            .calls_from_caller_to_callee(callable_id_from_text("sample.Exported.handle"), callable_id_from_text("sample.Exported.handle"));
         assert_eq!(local_edges.len(), 1);
         assert_eq!(
             local_edges[0].source_id,
@@ -1988,21 +1991,21 @@ mod tests {
         );
         assert!(
             typescript_view
-                .call_targets_from_caller("sample.Exported.handle")
-                .contains(&"sample.Exported.handle")
+                .call_targets_from_caller(callable_id_from_text("sample.Exported.handle"))
+                .contains(&callable_id_from_text("sample.Exported.handle"))
         );
 
         let module_local_call = call_site_named(&typescript_graph, "initialize");
-        let module_local_edge = call_edges_from(&typescript_graph, &module_local_call.call_site_id)
+        let module_local_edge = call_edges_from(&typescript_graph, module_local_call.call_site_id)
             .into_iter()
-            .find(|edge| edge.target_id.as_deref() == Some("sample.initialize"))
+            .find(|edge| edge.target_id == Some(callable_id_from_text("sample.initialize")))
             .expect("module-initializer local call edge");
         assert_caller_to_target_summary(
             &typescript_graph,
             &typescript_view,
-            "sample:<module>",
-            "sample.initialize",
-            &module_local_edge.edge_id,
+            callable_id_from_text("sample:<module>"),
+            callable_id_from_text("sample.initialize"),
+            module_local_edge.edge_id,
         );
 
         let canonical_call_count = typescript_graph
@@ -2115,7 +2118,7 @@ mod tests {
 
     fn call_edges_from<'a>(
         graph: &'a ProgramSupergraph,
-        call_site_id: &str,
+        call_site_id: NodeId,
     ) -> Vec<&'a sg::GraphEdge> {
         graph
             .edges
@@ -2166,15 +2169,15 @@ mod tests {
 
     fn assert_call_edge_to_target(
         graph: &ProgramSupergraph,
-        call_site_id: &str,
-        target_id: &str,
+        call_site_id: NodeId,
+        target_id: NodeId,
         resolution: Resolution,
     ) {
         assert!(
             call_edges_from(graph, call_site_id)
                 .into_iter()
                 .any(|edge| {
-                    edge.target_id.as_deref() == Some(target_id)
+                    edge.target_id == Some(target_id)
                         && matches!(
                             &edge.fact,
                             EdgeFact::Calls(calls) if calls.resolution == resolution
@@ -2186,7 +2189,7 @@ mod tests {
 
     fn assert_call_edge_to_kind(
         graph: &ProgramSupergraph,
-        call_site_id: &str,
+        call_site_id: NodeId,
         target_kind: NodeKind,
         resolution: Resolution,
     ) {
@@ -2194,7 +2197,7 @@ mod tests {
             call_edges_from(graph, call_site_id)
                 .into_iter()
                 .any(|edge| {
-                    let Some(target_id) = edge.target_id.as_deref() else {
+                    let Some(target_id) = edge.target_id else {
                         return false;
                     };
                     let target_matches = graph
@@ -2213,7 +2216,7 @@ mod tests {
 
     fn assert_targetless_call_edge(
         graph: &ProgramSupergraph,
-        call_site_id: &str,
+        call_site_id: NodeId,
         unresolved_target: &str,
         resolution: Resolution,
     ) {
@@ -2239,25 +2242,25 @@ mod tests {
     fn assert_caller_to_target_summary(
         graph: &ProgramSupergraph,
         view: &CallGraphView<'_>,
-        caller_id: &str,
-        target_id: &str,
-        edge_id: &str,
+        caller_id: NodeId,
+        target_id: NodeId,
+        edge_id: EdgeId,
     ) {
         assert!(
             graph
                 .indexes
                 .caller_to_concrete_target_calls
-                .get(caller_id)
-                .and_then(|targets| targets.get(target_id))
-                .is_some_and(|edges| edges.contains(&edge_id.to_string())),
+                .get(&caller_id)
+                .and_then(|targets| targets.get(&target_id))
+                .is_some_and(|edges| edges.contains(&edge_id)),
             "missing caller-to-concrete-target summary index for {caller_id} -> {target_id}"
         );
         assert!(
             graph
                 .indexes
                 .caller_to_concrete_call_targets
-                .get(caller_id)
-                .is_some_and(|targets| targets.contains(&target_id.to_string())),
+                .get(&caller_id)
+                .is_some_and(|targets| targets.contains(&target_id)),
             "missing caller-to-concrete-target target-list index for {caller_id} -> {target_id}"
         );
         let edges = view.calls_from_caller_to_target(caller_id, target_id);
@@ -2273,20 +2276,20 @@ mod tests {
         );
     }
 
-    fn assert_call_site_index_entry(graph: &ProgramSupergraph, call_site_id: &str, edge_id: &str) {
+    fn assert_call_site_index_entry(graph: &ProgramSupergraph, call_site_id: NodeId, edge_id: EdgeId) {
         assert!(
             graph
                 .indexes
                 .call_site_to_calls
-                .get(call_site_id)
-                .is_some_and(|edges| edges.contains(&edge_id.to_string())),
+                .get(&call_site_id)
+                .is_some_and(|edges| edges.contains(&edge_id)),
             "missing call-site index entry for {call_site_id} -> {edge_id}"
         );
     }
 
     fn resolution_edges_from<'a>(
         graph: &'a ProgramSupergraph,
-        source_id: &str,
+        source_id: NodeId,
     ) -> Vec<&'a sg::GraphEdge> {
         graph
             .edges
@@ -2297,8 +2300,8 @@ mod tests {
 
     fn assert_resolution_edge(
         graph: &ProgramSupergraph,
-        source_id: &str,
-        target_id: &str,
+        source_id: NodeId,
+        target_id: NodeId,
         resolution: Resolution,
     ) {
         assert!(
@@ -2306,7 +2309,7 @@ mod tests {
                 &edge.fact,
                 EdgeFact::ResolvesTo(resolves)
                     if edge.source_id == source_id
-                        && edge.target_id.as_deref() == Some(target_id)
+                        && edge.target_id == Some(target_id)
                         && resolves.resolution == resolution
             )),
             "missing {resolution:?} ResolvesTo edge from {source_id} to {target_id}"
@@ -2315,7 +2318,7 @@ mod tests {
 
     fn assert_source_resolves_to_kind(
         graph: &ProgramSupergraph,
-        source_id: &str,
+        source_id: NodeId,
         target_kind: NodeKind,
         resolution: Resolution,
     ) {
@@ -2323,7 +2326,7 @@ mod tests {
             resolution_edges_from(graph, source_id)
                 .into_iter()
                 .any(|edge| {
-                    let Some(target_id) = edge.target_id.as_deref() else {
+                    let Some(target_id) = edge.target_id else {
                         return false;
                     };
                     let target_matches = graph
@@ -2344,7 +2347,7 @@ mod tests {
         for node in &graph.nodes {
             if let NodeFact::Use(use_fact) = &node.fact {
                 assert!(
-                    !resolution_edges_from(graph, &use_fact.use_id).is_empty(),
+                    !resolution_edges_from(graph, use_fact.use_id).is_empty(),
                     "use {} should have at least one ResolvesTo edge",
                     use_fact.use_id
                 );
@@ -2356,7 +2359,7 @@ mod tests {
         for node in &graph.nodes {
             if let NodeFact::CallSite(call_site) = &node.fact {
                 assert!(
-                    !resolution_edges_from(graph, &call_site.call_site_id).is_empty(),
+                    !resolution_edges_from(graph, call_site.call_site_id).is_empty(),
                     "call site {} should have at least one ResolvesTo edge",
                     call_site.call_site_id
                 );
@@ -2364,7 +2367,7 @@ mod tests {
         }
     }
 
-    fn scope<'a>(graph: &'a ProgramSupergraph, scope_id: &str) -> &'a sg::Scope {
+    fn scope<'a>(graph: &'a ProgramSupergraph, scope_id: NodeId) -> &'a sg::Scope {
         graph
             .nodes
             .iter()

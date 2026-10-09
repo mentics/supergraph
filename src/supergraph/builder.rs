@@ -1785,6 +1785,7 @@ fn dedup_nested_index<K: Ord, L: Ord, V: Ord>(index: &mut BTreeMap<K, BTreeMap<L
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::supergraph::ids::test_support::test_id;
     use crate::supergraph::schema::{
         ArgumentShape, BasicBlockKind, BindingKind, BindingTarget, CallEdgeKind, CallableKind,
         ConditionKind, Conditions, ControlFlow, ControlFlowKind, ControlFlowNode,
@@ -1801,9 +1802,9 @@ mod tests {
 
     #[test]
     fn structural_node_families_are_constructible_with_envelope_metadata() {
-        let artifact_id = "artifact:main".to_string();
-        let scope_id = "scope:module".to_string();
-        let callable_id = "callable:main.process".to_string();
+        let artifact_id = test_id("artifact:main");
+        let scope_id = test_id("scope:module");
+        let callable_id = test_id("callable:main.process");
         let owner = source_owner(
             Some(artifact_id.clone()),
             Some(scope_id.clone()),
@@ -1823,14 +1824,14 @@ mod tests {
             }),
         }];
 
-        let statement_id = statement_id(&callable_id, "assignment", span, 0);
-        let expression_id = expression_id(&callable_id, "literal", span, 0);
-        let condition_id = condition_id(&callable_id, "branch", span, 0);
-        let symbol_id = symbol_id(&scope_id, "batch_size", Some(span));
-        let definition_id = definition_id(&callable_id, "batch_size", span);
-        let use_id = use_id(&callable_id, "batch_size", span);
-        let value_id = value_id(Some(&callable_id), "literal", Some(span));
-        let basic_block_id = basic_block_id(&callable_id, 0);
+        let statement_id = statement_id(callable_id, "assignment", span, 0);
+        let expression_id = expression_id(callable_id, "literal", span, 0);
+        let condition_id = condition_id(callable_id, "branch", span, 0);
+        let symbol_id = symbol_id(scope_id, "batch_size", Some(span));
+        let definition_id = definition_id(callable_id, "batch_size", span);
+        let use_id = use_id(callable_id, "batch_size", span);
+        let value_id = value_id(Some(callable_id), "literal", Some(span));
+        let basic_block_id = basic_block_id(callable_id, 0);
         let domain_knowledge_id = domain_knowledge_id("repository", "batch sizes are user visible");
 
         let mut builder = ProgramSupergraphBuilder::new("repo", "python");
@@ -2063,7 +2064,7 @@ mod tests {
 
     #[test]
     fn refresh_provenance_backfills_derived_fact_evidence() {
-        let artifact_id = "artifact:main".to_string();
+        let artifact_id = test_id("artifact:main");
         let span = span(30, 40);
         let mut builder = ProgramSupergraphBuilder::new("repo", "python");
         builder.add_artifact(
@@ -2114,7 +2115,7 @@ mod tests {
             .find(|node| node.node_id != artifact_id)
             .expect("derived node");
         let evidence = derived.evidence.first().expect("derived evidence");
-        assert_eq!(evidence.source_id.as_deref(), Some(artifact_id.as_str()));
+        assert_eq!(evidence.source_id, Some(artifact_id));
         assert_eq!(evidence.source_span, Some(span));
         assert_eq!(evidence.content_hash.as_deref(), Some("sha256:source-v1"));
     }
@@ -2127,14 +2128,14 @@ mod tests {
         let callable_subject = callable_id("main.calculate_risk");
         let caller_subject = callable_id("main.create_incident");
         let call_site_subject = call_site_id(
-            "artifact:main",
-            &caller_subject,
+            test_id("artifact:main"),
+            caller_subject,
             "calculate_risk",
             span(100, 114),
         );
 
-        let callable_v1 = node_by_id(&v1, &callable_subject);
-        let callable_v2 = node_by_id(&v2, &callable_subject);
+        let callable_v1 = node_by_id(&v1, callable_subject);
+        let callable_v2 = node_by_id(&v2, callable_subject);
         assert_eq!(callable_v1.node_id, callable_v2.node_id);
         assert_ne!(callable_v1.fact_id, callable_v2.fact_id);
         assert_ne!(callable_v1.payload_hash, callable_v2.payload_hash);
@@ -2144,8 +2145,8 @@ mod tests {
         assert_eq!(call_v1.edge_id, call_v2.edge_id);
         assert_eq!(call_v1.source_id, call_site_subject);
         assert_eq!(
-            call_v1.target_id.as_deref(),
-            Some(callable_subject.as_str())
+            call_v1.target_id,
+            Some(callable_subject)
         );
 
         let EdgeFact::Calls(calls_v2) = &call_v2.fact else {
@@ -2154,8 +2155,8 @@ mod tests {
         assert_eq!(calls_v2.caller_callable_id, caller_subject);
         assert_eq!(calls_v2.call_site_id, call_site_subject);
         assert_eq!(
-            calls_v2.callee_callable_id.as_deref(),
-            Some(callable_subject.as_str())
+            calls_v2.callee_callable_id,
+            Some(callable_subject)
         );
 
         let trace = v2
@@ -2190,8 +2191,8 @@ mod tests {
             .iter_mut()
             .find(|node| node.node_id == callable_subject)
             .expect("callable node");
-        callable_node.fact_id.clear();
-        callable_node.payload_hash.clear();
+        callable_node.fact_id = None;
+        callable_node.payload_hash = None;
 
         let json = serde_json::to_string(&graph).expect("serialize graph");
         assert!(
@@ -2206,7 +2207,7 @@ mod tests {
                 .indexes
                 .source_span_to_nodes
                 .contains_key(&SourceSpanIndexKey {
-                    artifact_id: Some("artifact:main".to_string()),
+                    artifact_id: Some(test_id("artifact:main")),
                     span: span(10, 25),
                 }),
             "source span index keys should roundtrip through JSON map keys"
@@ -2217,7 +2218,7 @@ mod tests {
             .as_array_mut()
             .expect("nodes array")
             .iter_mut()
-            .find(|node| node["node_id"] == callable_subject)
+            .find(|node| node["node_id"] == callable_subject.to_string())
             .expect("callable node JSON");
         node.as_object_mut().expect("node object").remove("fact_id");
         node.as_object_mut()
@@ -2226,17 +2227,17 @@ mod tests {
 
         let graph: ProgramSupergraph =
             serde_json::from_value(value).expect("deserialize graph without fact identity fields");
-        let migrated = node_by_id(&graph, &callable_subject);
-        assert_eq!(migrated.fact_id, "");
-        assert_eq!(migrated.payload_hash, "");
+        let migrated = node_by_id(&graph, callable_subject);
+        assert_eq!(migrated.fact_id, None);
+        assert_eq!(migrated.payload_hash, None);
     }
 
     #[test]
     fn uncertainty_classifications_cover_sg013_acceptance_examples() {
-        let artifact_id = "artifact:main".to_string();
-        let scope_id = "scope:module".to_string();
-        let caller_id = "callable:main.run".to_string();
-        let call_site_id = "call-site:dynamic".to_string();
+        let artifact_id = test_id("artifact:main");
+        let scope_id = test_id("scope:module");
+        let caller_id = test_id("callable:main.run");
+        let call_site_id = test_id("call-site:dynamic");
         let span = span(200, 220);
         let owner = source_owner(
             Some(artifact_id.clone()),
@@ -2256,7 +2257,7 @@ mod tests {
         );
         builder.add_statement(
             Statement {
-                statement_id: "statement:probable".to_string(),
+                statement_id: test_id("statement:probable"),
                 callable_id: caller_id.clone(),
                 parent_statement_id: None,
                 kind: StatementKind::Expression,
@@ -2272,7 +2273,7 @@ mod tests {
         );
         builder.add_symbol(
             Symbol {
-                symbol_id: "symbol:ambiguous".to_string(),
+                symbol_id: test_id("symbol:ambiguous"),
                 scope_id: scope_id.clone(),
                 name: "handler".to_string(),
                 kind: SymbolKind::Local,
@@ -2286,7 +2287,7 @@ mod tests {
         );
         builder.add_external_target(
             ExternalTarget {
-                external_target_id: "external:service".to_string(),
+                external_target_id: test_id("external:service"),
                 ecosystem: "python".to_string(),
                 package_name: Some("service".to_string()),
                 package_version: None,
@@ -2317,7 +2318,7 @@ mod tests {
         builder.add_calls(
             Calls {
                 caller_callable_id: caller_id.clone(),
-                callee_callable_id: Some("callable:maybe".to_string()),
+                callee_callable_id: Some(test_id("callable:maybe")),
                 external_target_id: None,
                 unresolved_target: None,
                 call_site_id: call_site_id.clone(),
@@ -2330,12 +2331,12 @@ mod tests {
             test_evidence("dynamic dispatch possible target"),
         );
         let alias_uncertainty_edge_id = builder.add_parameter_out(
-            "value:receiver".to_string(),
+            test_id("value:receiver"),
             call_site_id.clone(),
             ParameterOut {
                 call_site_id: call_site_id.clone(),
                 caller_callable_id: caller_id.clone(),
-                callee_callable_id: "callable:maybe".to_string(),
+                callee_callable_id: test_id("callable:maybe"),
                 parameter_name: "receiver".to_string(),
                 ordinal: 0,
                 precision: "sg083-parameter-out-possible-alias-mutation-summary".to_string(),
@@ -2369,7 +2370,7 @@ mod tests {
         ] {
             builder.add_diagnostic(
                 Diagnostic {
-                    diagnostic_id: id.to_string(),
+                    diagnostic_id: test_id(id),
                     kind,
                     severity: Severity::Warning,
                     message: message.to_string(),
@@ -2383,7 +2384,7 @@ mod tests {
         }
         builder.add_domain_knowledge(
             DomainKnowledge {
-                domain_knowledge_id: "domain:stale".to_string(),
+                domain_knowledge_id: test_id("domain:stale"),
                 scope: DomainKnowledgeScope::Repository,
                 summary: "legacy API contract".to_string(),
                 source: DomainKnowledgeSource::Documentation,
@@ -2399,27 +2400,27 @@ mod tests {
         let graph = builder.finish();
 
         assert_eq!(
-            node_uncertainty_by_id(&graph, &artifact_id),
+            node_uncertainty_by_id(&graph, artifact_id),
             Some(Uncertainty::Exact)
         );
         assert_eq!(
-            node_uncertainty_by_id(&graph, "statement:probable"),
+            node_uncertainty_by_id(&graph, test_id("statement:probable")),
             Some(Uncertainty::Probable)
         );
         assert_eq!(
-            node_uncertainty_by_id(&graph, "external:service"),
+            node_uncertainty_by_id(&graph, test_id("external:service")),
             Some(Uncertainty::External)
         );
         assert_eq!(
-            node_uncertainty_by_id(&graph, "symbol:ambiguous"),
+            node_uncertainty_by_id(&graph, test_id("symbol:ambiguous")),
             Some(Uncertainty::Ambiguous)
         );
         assert_eq!(
-            node_uncertainty_by_id(&graph, "diagnostic:unsupported"),
+            node_uncertainty_by_id(&graph, test_id("diagnostic:unsupported")),
             Some(Uncertainty::Unsupported)
         );
         assert_eq!(
-            node_uncertainty_by_id(&graph, "domain:stale"),
+            node_uncertainty_by_id(&graph, test_id("domain:stale")),
             Some(Uncertainty::Stale)
         );
         assert!(graph.edges.iter().any(|edge| {
@@ -2431,7 +2432,7 @@ mod tests {
                 && edge.uncertainty == Uncertainty::Possible
         }));
         assert_eq!(
-            edge_uncertainty_by_id(&graph, &alias_uncertainty_edge_id),
+            edge_uncertainty_by_id(&graph, alias_uncertainty_edge_id),
             Some(Uncertainty::Possible)
         );
     }
@@ -2445,25 +2446,25 @@ mod tests {
                 .expect("deserialize sg120 fixture");
 
         let expected_nodes = [
-            (NodeKind::Artifact, ids.artifact.as_str()),
-            (NodeKind::Scope, ids.scope.as_str()),
-            (NodeKind::Binding, ids.binding.as_str()),
-            (NodeKind::Callable, ids.callable.as_str()),
-            (NodeKind::CallSite, ids.call_site.as_str()),
-            (NodeKind::ExternalTarget, ids.external.as_str()),
-            (NodeKind::Statement, ids.statement.as_str()),
-            (NodeKind::Expression, ids.expression.as_str()),
-            (NodeKind::Condition, ids.condition.as_str()),
-            (NodeKind::Symbol, ids.symbol.as_str()),
-            (NodeKind::Definition, ids.definition.as_str()),
-            (NodeKind::Use, ids.use_node.as_str()),
-            (NodeKind::Value, ids.value_source.as_str()),
-            (NodeKind::BasicBlock, ids.basic_block.as_str()),
-            (NodeKind::DomainKnowledge, ids.domain.as_str()),
-            (NodeKind::ControlFlow, ids.cfg_entry.as_str()),
-            (NodeKind::DataFlow, ids.data_flow_node.as_str()),
-            (NodeKind::Requirement, ids.requirement.as_str()),
-            (NodeKind::Diagnostic, ids.diagnostic.as_str()),
+            (NodeKind::Artifact, ids.artifact),
+            (NodeKind::Scope, ids.scope),
+            (NodeKind::Binding, ids.binding),
+            (NodeKind::Callable, ids.callable),
+            (NodeKind::CallSite, ids.call_site),
+            (NodeKind::ExternalTarget, ids.external),
+            (NodeKind::Statement, ids.statement),
+            (NodeKind::Expression, ids.expression),
+            (NodeKind::Condition, ids.condition),
+            (NodeKind::Symbol, ids.symbol),
+            (NodeKind::Definition, ids.definition),
+            (NodeKind::Use, ids.use_node),
+            (NodeKind::Value, ids.value_source),
+            (NodeKind::BasicBlock, ids.basic_block),
+            (NodeKind::DomainKnowledge, ids.domain),
+            (NodeKind::ControlFlow, ids.cfg_entry),
+            (NodeKind::DataFlow, ids.data_flow_node),
+            (NodeKind::Requirement, ids.requirement),
+            (NodeKind::Diagnostic, ids.diagnostic),
         ];
         assert_eq!(
             expected_nodes.len(),
@@ -2476,15 +2477,15 @@ mod tests {
             assert_eq!(node.kind, kind);
             assert_eq!(node.kind, node_fact_kind(&node.fact));
             assert_eq!(node.node_id, id);
-            assert!(!node.fact_id.is_empty(), "{kind:?} should have a fact id");
+            assert!(!node.fact_id.is_none(), "{kind:?} should have a fact id");
             assert!(
-                !node.payload_hash.is_empty(),
+                !node.payload_hash.is_none(),
                 "{kind:?} should have a payload hash"
             );
             assert!(!node.evidence.is_empty(), "{kind:?} should carry evidence");
             assert!(
                 node.evidence.iter().all(|evidence| {
-                    evidence.source_id.as_deref() == Some(ids.artifact.as_str())
+                    evidence.source_id == Some(ids.artifact)
                         && evidence.content_hash.as_deref() == Some("sha256:sg120")
                 }),
                 "{kind:?} evidence should retain provenance"
@@ -2494,36 +2495,36 @@ mod tests {
                     .indexes
                     .nodes_by_kind
                     .get(&kind)
-                    .is_some_and(|node_ids| node_ids.iter().any(|node_id| node_id == id)),
+                    .is_some_and(|node_ids| node_ids.iter().any(|node_id| node_id == &id)),
                 "{kind:?} should be indexed by family"
             );
             assert!(
-                roundtrip.indexes.node_position_by_id.contains_key(id),
+                roundtrip.indexes.node_position_by_id.contains_key(&id),
                 "{kind:?} should be indexed by stable subject id"
             );
         }
 
         let expected_edges = [
-            (EdgeKind::Contains, ids.contains.as_str()),
-            (EdgeKind::Binds, ids.binds.as_str()),
-            (EdgeKind::ResolvesTo, ids.resolves_to.as_str()),
-            (EdgeKind::Calls, ids.calls.as_str()),
-            (EdgeKind::ControlFlow, ids.control_flow.as_str()),
-            (EdgeKind::Controls, ids.controls.as_str()),
-            (EdgeKind::Defines, ids.defines.as_str()),
-            (EdgeKind::Uses, ids.uses.as_str()),
-            (EdgeKind::DataFlow, ids.data_flow.as_str()),
-            (EdgeKind::ParameterIn, ids.parameter_in.as_str()),
-            (EdgeKind::ReturnsTo, ids.returns_to.as_str()),
-            (EdgeKind::ParameterOut, ids.parameter_out.as_str()),
-            (EdgeKind::ThrowsTo, ids.throws_to.as_str()),
-            (EdgeKind::DecomposesTo, ids.decomposes_to.as_str()),
-            (EdgeKind::Conditions, ids.conditions.as_str()),
-            (EdgeKind::Orders, ids.orders.as_str()),
-            (EdgeKind::TracesTo, ids.traces_to.as_str()),
+            (EdgeKind::Contains, ids.contains),
+            (EdgeKind::Binds, ids.binds),
+            (EdgeKind::ResolvesTo, ids.resolves_to),
+            (EdgeKind::Calls, ids.calls),
+            (EdgeKind::ControlFlow, ids.control_flow),
+            (EdgeKind::Controls, ids.controls),
+            (EdgeKind::Defines, ids.defines),
+            (EdgeKind::Uses, ids.uses),
+            (EdgeKind::DataFlow, ids.data_flow),
+            (EdgeKind::ParameterIn, ids.parameter_in),
+            (EdgeKind::ReturnsTo, ids.returns_to),
+            (EdgeKind::ParameterOut, ids.parameter_out),
+            (EdgeKind::ThrowsTo, ids.throws_to),
+            (EdgeKind::DecomposesTo, ids.decomposes_to),
+            (EdgeKind::Conditions, ids.conditions),
+            (EdgeKind::Orders, ids.orders),
+            (EdgeKind::TracesTo, ids.traces_to),
             (
                 EdgeKind::DependsOnDomainKnowledge,
-                ids.depends_on_domain.as_str(),
+                ids.depends_on_domain,
             ),
         ];
         assert_eq!(
@@ -2537,10 +2538,10 @@ mod tests {
             assert_eq!(edge.kind, kind);
             assert_eq!(edge.kind, edge_fact_kind(&edge.fact));
             assert_eq!(edge.edge_id, id);
-            assert!(!edge.source_id.is_empty(), "{kind:?} should have a source");
-            assert!(!edge.fact_id.is_empty(), "{kind:?} should have a fact id");
+            assert!(edge.source_id.hash.get() != 0, "{kind:?} should have a source");
+            assert!(!edge.fact_id.is_none(), "{kind:?} should have a fact id");
             assert!(
-                !edge.payload_hash.is_empty(),
+                !edge.payload_hash.is_none(),
                 "{kind:?} should have a payload hash"
             );
             assert!(!edge.evidence.is_empty(), "{kind:?} should carry evidence");
@@ -2549,11 +2550,11 @@ mod tests {
                     .indexes
                     .edges_by_kind
                     .get(&kind)
-                    .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == id)),
+                    .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == &id)),
                 "{kind:?} should be indexed by family"
             );
             assert!(
-                roundtrip.indexes.edge_position_by_id.contains_key(id),
+                roundtrip.indexes.edge_position_by_id.contains_key(&id),
                 "{kind:?} should be indexed by stable subject id"
             );
             assert!(
@@ -2562,17 +2563,17 @@ mod tests {
                     .outgoing_edges_by_node_and_kind
                     .get(&edge.source_id)
                     .and_then(|edges_by_kind| edges_by_kind.get(&kind))
-                    .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == id)),
+                    .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == &id)),
                 "{kind:?} should be indexed by source and family"
             );
-            if let Some(target_id) = edge.target_id.as_deref() {
+            if let Some(target_id) = edge.target_id {
                 assert!(
                     roundtrip
                         .indexes
                         .incoming_edges_by_node_and_kind
-                        .get(target_id)
+                        .get(&target_id)
                         .and_then(|edges_by_kind| edges_by_kind.get(&kind))
-                        .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == id)),
+                        .is_some_and(|edge_ids| edge_ids.iter().any(|edge_id| edge_id == &id)),
                     "{kind:?} should be indexed by target and family"
                 );
             }
@@ -2706,7 +2707,7 @@ mod tests {
             .as_array_mut()
             .expect("nodes array")
             .iter_mut()
-            .find(|node| node["node_id"] == ids.requirement)
+            .find(|node| node["node_id"] == ids.requirement.to_string())
             .expect("requirement node JSON");
         let node_object = node.as_object_mut().expect("node object");
         node_object.remove("fact_id");
@@ -2717,7 +2718,7 @@ mod tests {
             .as_array_mut()
             .expect("edges array")
             .iter_mut()
-            .find(|edge| edge["edge_id"] == ids.traces_to)
+            .find(|edge| edge["edge_id"] == ids.traces_to.to_string())
             .expect("trace edge JSON");
         let edge_object = edge.as_object_mut().expect("edge object");
         edge_object.remove("fact_id");
@@ -2726,14 +2727,14 @@ mod tests {
 
         let migrated: ProgramSupergraph =
             serde_json::from_value(value).expect("deserialize graph with omitted defaults");
-        let requirement = node_by_id(&migrated, &ids.requirement);
-        assert_eq!(requirement.fact_id, "");
-        assert_eq!(requirement.payload_hash, "");
+        let requirement = node_by_id(&migrated, ids.requirement);
+        assert_eq!(requirement.fact_id, None);
+        assert_eq!(requirement.payload_hash, None);
         assert_eq!(requirement.uncertainty, Uncertainty::Exact);
 
-        let trace = edge_by_id(&migrated, &ids.traces_to);
-        assert_eq!(trace.fact_id, "");
-        assert_eq!(trace.payload_hash, "");
+        let trace = edge_by_id(&migrated, ids.traces_to);
+        assert_eq!(trace.fact_id, None);
+        assert_eq!(trace.payload_hash, None);
         assert_eq!(trace.uncertainty, Uncertainty::Exact);
     }
 
@@ -2801,34 +2802,34 @@ mod tests {
 
     fn sg120_schema_fixture() -> (ProgramSupergraph, Sg120FixtureIds, SourceSpan) {
         let span = span(10, 20);
-        let artifact = "artifact:sg120".to_string();
-        let scope = "scope:sg120.module".to_string();
-        let binding = "binding:sg120.handler".to_string();
-        let callable = "callable:sg120.handler".to_string();
-        let call_site = "call-site:sg120.emit".to_string();
-        let external = "external:sg120.service.emit".to_string();
-        let statement = "statement:sg120.assign".to_string();
-        let expression = "expression:sg120.literal".to_string();
-        let condition = "condition:sg120.guard".to_string();
-        let symbol = "symbol:sg120.batch_size".to_string();
-        let definition = "definition:sg120.batch_size".to_string();
-        let use_node = "use:sg120.batch_size".to_string();
-        let value_source = "value:sg120.literal".to_string();
-        let value_formal = "value:sg120.formal".to_string();
-        let value_argument = "value:sg120.argument".to_string();
-        let value_return = "value:sg120.return".to_string();
-        let value_call_result = "value:sg120.call-result".to_string();
-        let value_mutable_state = "value:sg120.mutable-state".to_string();
-        let value_exception = "value:sg120.exception".to_string();
-        let basic_block = "basic-block:sg120.0".to_string();
-        let domain = "domain-knowledge:sg120".to_string();
-        let cfg_entry = "cfg:sg120.entry".to_string();
-        let cfg_exit = "cfg:sg120.exit".to_string();
-        let data_flow_node = "dfg:sg120.use".to_string();
-        let requirement = "requirement:sg120.parent".to_string();
-        let child_requirement = "requirement:sg120.child".to_string();
-        let condition_requirement = "requirement:sg120.condition".to_string();
-        let diagnostic = "diagnostic:sg120.unsupported".to_string();
+        let artifact = test_id("artifact:sg120");
+        let scope = test_id("scope:sg120.module");
+        let binding = test_id("binding:sg120.handler");
+        let callable = test_id("callable:sg120.handler");
+        let call_site = test_id("call-site:sg120.emit");
+        let external = test_id("external:sg120.service.emit");
+        let statement = test_id("statement:sg120.assign");
+        let expression = test_id("expression:sg120.literal");
+        let condition = test_id("condition:sg120.guard");
+        let symbol = test_id("symbol:sg120.batch_size");
+        let definition = test_id("definition:sg120.batch_size");
+        let use_node = test_id("use:sg120.batch_size");
+        let value_source = test_id("value:sg120.literal");
+        let value_formal = test_id("value:sg120.formal");
+        let value_argument = test_id("value:sg120.argument");
+        let value_return = test_id("value:sg120.return");
+        let value_call_result = test_id("value:sg120.call-result");
+        let value_mutable_state = test_id("value:sg120.mutable-state");
+        let value_exception = test_id("value:sg120.exception");
+        let basic_block = test_id("basic-block:sg120.0");
+        let domain = test_id("domain-knowledge:sg120");
+        let cfg_entry = test_id("cfg:sg120.entry");
+        let cfg_exit = test_id("cfg:sg120.exit");
+        let data_flow_node = test_id("dfg:sg120.use");
+        let requirement = test_id("requirement:sg120.parent");
+        let child_requirement = test_id("requirement:sg120.child");
+        let condition_requirement = test_id("requirement:sg120.condition");
+        let diagnostic = test_id("diagnostic:sg120.unsupported");
         let owner = source_owner(
             Some(artifact.clone()),
             Some(scope.clone()),
@@ -2844,7 +2845,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "artifact source", None),
+            schema_evidence(artifact, "artifact source", None),
             NodeFact::Artifact(Artifact {
                 artifact_id: artifact.clone(),
                 path: "sg120.py".to_string(),
@@ -2858,7 +2859,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "module scope", None),
+            schema_evidence(artifact, "module scope", None),
             NodeFact::Scope(Scope {
                 scope_id: scope.clone(),
                 parent_scope_id: None,
@@ -2877,7 +2878,7 @@ mod tests {
             scope_owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "binding", Some(span)),
+            schema_evidence(artifact, "binding", Some(span)),
             NodeFact::Binding(Binding {
                 binding_id: binding.clone(),
                 scope_id: scope.clone(),
@@ -2893,7 +2894,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "callable", Some(span)),
+            schema_evidence(artifact, "callable", Some(span)),
             NodeFact::Callable(Callable {
                 callable_id: callable.clone(),
                 kind: CallableKind::Function,
@@ -2918,7 +2919,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "call site", Some(span)),
+            schema_evidence(artifact, "call site", Some(span)),
             NodeFact::CallSite(CallSite {
                 call_site_id: call_site.clone(),
                 artifact_id: artifact.clone(),
@@ -2939,7 +2940,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "external target", Some(span)),
+            schema_evidence(artifact, "external target", Some(span)),
             NodeFact::ExternalTarget(ExternalTarget {
                 external_target_id: external.clone(),
                 ecosystem: "python".to_string(),
@@ -2958,7 +2959,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "statement", Some(span)),
+            schema_evidence(artifact, "statement", Some(span)),
             NodeFact::Statement(Statement {
                 statement_id: statement.clone(),
                 callable_id: callable.clone(),
@@ -2976,7 +2977,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "expression", Some(span)),
+            schema_evidence(artifact, "expression", Some(span)),
             NodeFact::Expression(Expression {
                 expression_id: expression.clone(),
                 callable_id: callable.clone(),
@@ -3001,7 +3002,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "condition", Some(span)),
+            schema_evidence(artifact, "condition", Some(span)),
             NodeFact::Condition(Condition {
                 condition_id: condition.clone(),
                 callable_id: callable.clone(),
@@ -3021,7 +3022,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "symbol", Some(span)),
+            schema_evidence(artifact, "symbol", Some(span)),
             NodeFact::Symbol(Symbol {
                 symbol_id: symbol.clone(),
                 scope_id: scope.clone(),
@@ -3037,7 +3038,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "definition", Some(span)),
+            schema_evidence(artifact, "definition", Some(span)),
             NodeFact::Definition(Definition {
                 definition_id: definition.clone(),
                 callable_id: callable.clone(),
@@ -3053,7 +3054,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "use", Some(span)),
+            schema_evidence(artifact, "use", Some(span)),
             NodeFact::Use(Use {
                 use_id: use_node.clone(),
                 callable_id: callable.clone(),
@@ -3148,7 +3149,7 @@ mod tests {
                 owner.clone(),
                 Some(span),
                 Confidence::Exact,
-                schema_evidence(&artifact, "value", Some(span)),
+                schema_evidence(artifact, "value", Some(span)),
                 NodeFact::Value(Value {
                     value_id: id,
                     callable_id: Some(callable.clone()),
@@ -3171,7 +3172,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "basic block", Some(span)),
+            schema_evidence(artifact, "basic block", Some(span)),
             NodeFact::BasicBlock(BasicBlock {
                 basic_block_id: basic_block.clone(),
                 callable_id: callable.clone(),
@@ -3188,7 +3189,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Probable,
-            schema_evidence(&artifact, "domain knowledge", None),
+            schema_evidence(artifact, "domain knowledge", None),
             NodeFact::DomainKnowledge(DomainKnowledge {
                 domain_knowledge_id: domain.clone(),
                 scope: DomainKnowledgeScope::Repository,
@@ -3208,7 +3209,7 @@ mod tests {
                 owner.clone(),
                 Some(span),
                 Confidence::Exact,
-                schema_evidence(&artifact, "cfg node", Some(span)),
+                schema_evidence(artifact, "cfg node", Some(span)),
                 NodeFact::ControlFlow(ControlFlowNode {
                     cfg_node_id: id,
                     callable_id: callable.clone(),
@@ -3224,7 +3225,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "data-flow node", Some(span)),
+            schema_evidence(artifact, "data-flow node", Some(span)),
             NodeFact::DataFlow(DataFlowNode {
                 data_flow_node_id: data_flow_node.clone(),
                 callable_id: callable.clone(),
@@ -3257,7 +3258,7 @@ mod tests {
                 artifact_owner.clone(),
                 None,
                 Confidence::Exact,
-                schema_evidence(&artifact, "requirement", None),
+                schema_evidence(artifact, "requirement", None),
                 NodeFact::Requirement(Requirement {
                     requirement_id: id,
                     kind,
@@ -3274,7 +3275,7 @@ mod tests {
             artifact_owner.clone(),
             Some(span),
             Confidence::Unknown,
-            schema_evidence(&artifact, "diagnostic", Some(span)),
+            schema_evidence(artifact, "diagnostic", Some(span)),
             NodeFact::Diagnostic(Diagnostic {
                 diagnostic_id: diagnostic.clone(),
                 kind: DiagnosticKind::UnsupportedSyntax,
@@ -3286,45 +3287,36 @@ mod tests {
             }),
         ));
 
-        let contains = stable_id("edge", &["contains", &artifact, &scope]);
-        let binds = stable_id("edge", &["binds", &scope, &binding]);
-        let resolves_to = stable_id("edge", &["resolves-to", &binding, &callable]);
-        let calls = stable_id("edge", &["calls", &callable, &call_site, &external]);
-        let control_flow = stable_id("edge", &["control-flow", &cfg_entry, &cfg_exit]);
-        let controls = stable_id("edge", &["controls", &condition, &statement]);
-        let defines = stable_id("edge", &["defines", &definition, &symbol]);
-        let uses = stable_id("edge", &["uses", &use_node, &symbol]);
-        let data_flow = stable_id("edge", &["data-flow", &value_source, &value_call_result]);
-        let parameter_in = stable_id("edge", &["parameter-in", &value_argument, &value_formal]);
-        let returns_to = stable_id("edge", &["returns-to", &value_return, &value_call_result]);
-        let parameter_out = stable_id(
-            "edge",
-            &["parameter-out", &value_formal, &value_mutable_state],
-        );
-        let throws_to = stable_id("edge", &["throws-to", &value_exception, &cfg_exit]);
-        let decomposes_to = stable_id("edge", &["decomposes-to", &requirement, &child_requirement]);
-        let conditions = stable_id(
-            "edge",
-            &["conditions", &condition_requirement, &child_requirement],
-        );
-        let orders = stable_id("edge", &["orders", &requirement, &child_requirement]);
-        let traces_to = stable_id("edge", &["traces-to", &requirement, &statement]);
-        let depends_on_domain = stable_id(
-            "edge",
-            &["depends-on-domain-knowledge", &requirement, &domain],
-        );
+        let contains = stable_edge_id(id_parts!["contains", artifact, scope]);
+        let binds = stable_edge_id(id_parts!["binds", scope, binding]);
+        let resolves_to = stable_edge_id(id_parts!["resolves-to", binding, callable]);
+        let calls = stable_edge_id(id_parts!["calls", callable, call_site, external]);
+        let control_flow = stable_edge_id(id_parts!["control-flow", cfg_entry, cfg_exit]);
+        let controls = stable_edge_id(id_parts!["controls", condition, statement]);
+        let defines = stable_edge_id(id_parts!["defines", definition, symbol]);
+        let uses = stable_edge_id(id_parts!["uses", use_node, symbol]);
+        let data_flow = stable_edge_id(id_parts!["data-flow", value_source, value_call_result]);
+        let parameter_in = stable_edge_id(id_parts!["parameter-in", value_argument, value_formal]);
+        let returns_to = stable_edge_id(id_parts!["returns-to", value_return, value_call_result]);
+        let parameter_out = stable_edge_id(id_parts!["parameter-out", value_formal, value_mutable_state]);
+        let throws_to = stable_edge_id(id_parts!["throws-to", value_exception, cfg_exit]);
+        let decomposes_to = stable_edge_id(id_parts!["decomposes-to", requirement, child_requirement]);
+        let conditions = stable_edge_id(id_parts!["conditions", condition_requirement, child_requirement]);
+        let orders = stable_edge_id(id_parts!["orders", requirement, child_requirement]);
+        let traces_to = stable_edge_id(id_parts!["traces-to", requirement, statement]);
+        let depends_on_domain = stable_edge_id(id_parts!["depends-on-domain-knowledge", requirement, domain]);
 
         builder.add_contains(
             artifact.clone(),
             scope.clone(),
             artifact_owner.clone(),
-            schema_evidence(&artifact, "contains", None),
+            schema_evidence(artifact, "contains", None),
         );
         builder.add_binds(
             scope.clone(),
             binding.clone(),
             scope_owner.clone(),
-            schema_evidence(&artifact, "binds", Some(span)),
+            schema_evidence(artifact, "binds", Some(span)),
         );
         builder.add_resolves_to_with_resolution(
             binding.clone(),
@@ -3332,7 +3324,7 @@ mod tests {
             Resolution::Exact,
             scope_owner.clone(),
             Confidence::Exact,
-            schema_evidence(&artifact, "resolves", Some(span)),
+            schema_evidence(artifact, "resolves", Some(span)),
         );
         builder.add_calls(
             Calls {
@@ -3347,7 +3339,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "calls", Some(span)),
+            schema_evidence(artifact, "calls", Some(span)),
         );
         builder.add_control_flow(
             cfg_entry.clone(),
@@ -3362,7 +3354,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "control flow", Some(span)),
+            schema_evidence(artifact, "control flow", Some(span)),
         );
         builder.add_controls(
             Controls {
@@ -3374,7 +3366,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "controls", Some(span)),
+            schema_evidence(artifact, "controls", Some(span)),
         );
         builder.add_defines(
             definition.clone(),
@@ -3387,7 +3379,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "defines", Some(span)),
+            schema_evidence(artifact, "defines", Some(span)),
         );
         builder.add_uses(
             use_node.clone(),
@@ -3400,7 +3392,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "uses", Some(span)),
+            schema_evidence(artifact, "uses", Some(span)),
         );
         builder.add_data_flow(
             value_source.clone(),
@@ -3414,7 +3406,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "data flow", Some(span)),
+            schema_evidence(artifact, "data flow", Some(span)),
         );
         builder.add_parameter_in(
             value_argument.clone(),
@@ -3430,7 +3422,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "parameter in", Some(span)),
+            schema_evidence(artifact, "parameter in", Some(span)),
         );
         builder.add_returns_to(
             value_return.clone(),
@@ -3444,7 +3436,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "returns to", Some(span)),
+            schema_evidence(artifact, "returns to", Some(span)),
         );
         builder.add_parameter_out(
             value_formal.clone(),
@@ -3460,7 +3452,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Unknown,
-            schema_evidence(&artifact, "parameter out", Some(span)),
+            schema_evidence(artifact, "parameter out", Some(span)),
         );
         builder.add_throws_to(
             value_exception.clone(),
@@ -3477,7 +3469,7 @@ mod tests {
             owner.clone(),
             Some(span),
             Confidence::Exact,
-            schema_evidence(&artifact, "throws to", Some(span)),
+            schema_evidence(artifact, "throws to", Some(span)),
         );
         builder.add_decomposes_to(
             DecomposesTo {
@@ -3487,7 +3479,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "decomposes to", None),
+            schema_evidence(artifact, "decomposes to", None),
         );
         builder.add_conditions(
             Conditions {
@@ -3497,7 +3489,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "conditions", None),
+            schema_evidence(artifact, "conditions", None),
         );
         builder.add_orders(
             Orders {
@@ -3508,7 +3500,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "orders", None),
+            schema_evidence(artifact, "orders", None),
         );
         builder.add_traces_to(
             TracesTo {
@@ -3519,7 +3511,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Exact,
-            schema_evidence(&artifact, "traces to", None),
+            schema_evidence(artifact, "traces to", None),
         );
         builder.add_depends_on_domain_knowledge(
             DependsOnDomainKnowledge {
@@ -3530,7 +3522,7 @@ mod tests {
             artifact_owner.clone(),
             None,
             Confidence::Probable,
-            schema_evidence(&artifact, "depends on domain", None),
+            schema_evidence(artifact, "depends on domain", None),
         );
 
         (
@@ -3611,14 +3603,14 @@ mod tests {
     }
 
     fn schema_evidence(
-        artifact_id: &str,
+        artifact_id: NodeId,
         summary: &str,
         source_span: Option<SourceSpan>,
     ) -> Vec<Evidence> {
         vec![Evidence {
             kind: EvidenceKind::Parser,
             summary: summary.to_string(),
-            source_id: Some(artifact_id.to_string()),
+            source_id: Some(artifact_id),
             source_span,
             content_hash: Some("sha256:sg120".to_string()),
             syntax: Some(SyntaxReference {
@@ -3677,12 +3669,12 @@ mod tests {
     }
 
     fn graph_with_callable_body(body_span: SourceSpan) -> ProgramSupergraph {
-        let artifact_id = "artifact:main".to_string();
-        let module_scope_id = scope_id(&artifact_id, &["module"]);
+        let artifact_id = test_id("artifact:main");
+        let module_scope_id = scope_id(artifact_id, &["module"]);
         let caller_id = callable_id("main.create_incident");
         let callee_id = callable_id("main.calculate_risk");
-        let call_site_id = call_site_id(&artifact_id, &caller_id, "calculate_risk", span(100, 114));
-        let requirement_id = stable_id("requirement", &[&callee_id, "callable-behavior"]);
+        let call_site_id = call_site_id(artifact_id, caller_id, "calculate_risk", span(100, 114));
+        let requirement_id = stable_id(Tag::Requirement, id_parts![callee_id, "callable-behavior"]);
         let declaration_span = span(10, 25);
 
         let mut builder = ProgramSupergraphBuilder::new("repo", "python");
@@ -3799,7 +3791,7 @@ mod tests {
             }),
         });
         graph.edges.push(GraphEdge {
-            edge_id: stable_id("edge", &["traces-to", &requirement_id, &callee_id]),
+            edge_id: stable_edge_id(id_parts!["traces-to", requirement_id, callee_id]),
             fact_id: None,
             payload_hash: None,
             kind: EdgeKind::TracesTo,
@@ -3825,7 +3817,7 @@ mod tests {
         graph
     }
 
-    fn node_by_id<'a>(graph: &'a ProgramSupergraph, node_id: &str) -> &'a GraphNode {
+    fn node_by_id<'a>(graph: &'a ProgramSupergraph, node_id: NodeId) -> &'a GraphNode {
         graph
             .nodes
             .iter()
@@ -3833,7 +3825,7 @@ mod tests {
             .expect("node by stable subject id")
     }
 
-    fn edge_by_id<'a>(graph: &'a ProgramSupergraph, edge_id: &str) -> &'a GraphEdge {
+    fn edge_by_id<'a>(graph: &'a ProgramSupergraph, edge_id: EdgeId) -> &'a GraphEdge {
         graph
             .edges
             .iter()
@@ -3849,7 +3841,7 @@ mod tests {
             .expect("calls edge")
     }
 
-    fn node_uncertainty_by_id(graph: &ProgramSupergraph, node_id: &str) -> Option<Uncertainty> {
+    fn node_uncertainty_by_id(graph: &ProgramSupergraph, node_id: NodeId) -> Option<Uncertainty> {
         graph
             .nodes
             .iter()
@@ -3857,7 +3849,7 @@ mod tests {
             .map(|node| node.uncertainty)
     }
 
-    fn edge_uncertainty_by_id(graph: &ProgramSupergraph, edge_id: &str) -> Option<Uncertainty> {
+    fn edge_uncertainty_by_id(graph: &ProgramSupergraph, edge_id: EdgeId) -> Option<Uncertainty> {
         graph
             .edges
             .iter()

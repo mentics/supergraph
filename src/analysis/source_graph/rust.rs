@@ -547,6 +547,7 @@ mod tests {
     use super::*;
     use crate::parser::rust::{filter_file, parse_rust_file};
     use crate::supergraph::CallGraphView;
+    use crate::supergraph::ids::callable_id_from_text;
 
     fn project(files: &[(&str, &str)]) -> ProjectAst {
         let directory = std::env::temp_dir().join(format!(
@@ -621,12 +622,12 @@ pub fn run() {
         ]));
         let view = CallGraphView::new(&graph);
 
-        let run_targets = view.call_targets_from_caller("src.run");
-        assert!(run_targets.contains(&"src.Counter.new"), "{run_targets:?}");
-        assert!(run_targets.contains(&"src.util.helper"), "{run_targets:?}");
+        let run_targets = view.call_targets_from_caller(callable_id_from_text("src.run"));
+        assert!(run_targets.contains(&callable_id_from_text("src.Counter.new")), "{run_targets:?}");
+        assert!(run_targets.contains(&callable_id_from_text("src.util.helper")), "{run_targets:?}");
         assert_eq!(
-            view.call_targets_from_caller("src.Counter.bump"),
-            vec!["src.Counter.reset"]
+            view.call_targets_from_caller(callable_id_from_text("src.Counter.bump")),
+            vec![callable_id_from_text("src.Counter.reset")]
         );
         assert_eq!(graph.language, "rust");
     }

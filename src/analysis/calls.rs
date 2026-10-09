@@ -31,7 +31,7 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
         };
 
         let Some(call_target) =
-            call_target_from_resolution(call_site, target_id, target_kind, resolves_to.resolution)
+            call_target_from_resolution(call_site, *target_id, target_kind, resolves_to.resolution)
         else {
             continue;
         };
@@ -56,11 +56,11 @@ pub(crate) fn emit(graph: &mut ProgramSupergraph) {
                 edge_id: edge_id(
                     "calls",
                     call_site.call_site_id,
-                    &target_key,
+                    target_key.part(),
                     &format!("{PRECISION}:{:?}", resolves_to.resolution),
                 ),
-                fact_id: String::new(),
-                payload_hash: String::new(),
+                fact_id: None,
+                payload_hash: None,
                 kind: EdgeKind::Calls,
                 source_id: call_site.call_site_id.clone(),
                 target_id: call_target.edge_target_id.clone(),
@@ -118,6 +118,21 @@ impl CallResolutionSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum TargetKey {
+    Id(NodeId),
+    Text(String),
+}
+
+impl TargetKey {
+    fn part(&self) -> sg::ids::IdPart<'_> {
+        match self {
+            TargetKey::Id(id) => sg::ids::IdPart::Id(*id),
+            TargetKey::Text(text) => sg::ids::IdPart::Str(text),
+        }
+    }
+}
+
 struct CallTarget {
     resolution_target_id: NodeId,
     edge_target_id: Option<NodeId>,
@@ -127,39 +142,40 @@ struct CallTarget {
 }
 
 impl CallTarget {
-    fn edge_id_target_key(&self) -> String {
-        self.edge_target_id
-            .clone()
-            .or_else(|| self.unresolved_target.clone())
-            .unwrap_or_else(|| self.resolution_target_id.clone())
+    fn edge_id_target_key(&self) -> TargetKey {
+        match (&self.edge_target_id, &self.unresolved_target) {
+            (Some(id), _) => TargetKey::Id(*id),
+            (None, Some(text)) => TargetKey::Text(text.clone()),
+            (None, None) => TargetKey::Id(self.resolution_target_id),
+        }
     }
 }
 
 fn call_target_from_resolution(
     call_site: &sg::CallSite,
-    target_id: &str,
+    target_id: NodeId,
     target_kind: NodeKind,
     resolution: Resolution,
 ) -> Option<CallTarget> {
     match target_kind {
         NodeKind::Callable => Some(CallTarget {
-            resolution_target_id: target_id.to_string(),
-            edge_target_id: Some(target_id.to_string()),
-            callee_callable_id: Some(target_id.to_string()),
+            resolution_target_id: target_id,
+            edge_target_id: Some(target_id),
+            callee_callable_id: Some(target_id),
             external_target_id: None,
             unresolved_target: None,
         }),
         NodeKind::ExternalTarget => Some(CallTarget {
-            resolution_target_id: target_id.to_string(),
-            edge_target_id: (resolution != Resolution::Unresolved).then(|| target_id.to_string()),
+            resolution_target_id: target_id,
+            edge_target_id: (resolution != Resolution::Unresolved).then(|| target_id),
             callee_callable_id: None,
             external_target_id: (resolution != Resolution::Unresolved)
-                .then(|| target_id.to_string()),
+                .then(|| target_id),
             unresolved_target: (resolution == Resolution::Unresolved)
                 .then(|| call_site.callee_expression.clone()),
         }),
         NodeKind::Binding => Some(CallTarget {
-            resolution_target_id: target_id.to_string(),
+            resolution_target_id: target_id,
             edge_target_id: None,
             callee_callable_id: None,
             external_target_id: None,
@@ -205,6 +221,7 @@ fn confidence_from_resolution(resolution: Resolution) -> Confidence {
 
 #[cfg(test)]
 mod tests {
+    use crate::supergraph::ids::test_support::{test_edge_id, test_id};
     use super::*;
     use crate::ast::{CallContext, SourceSpan};
     use crate::supergraph::{
@@ -292,7 +309,7 @@ mod tests {
             Resolution::Unresolved,
         );
         assert!(
-            calls.iter().all(|edge| edge.edge_id != "stale-call"),
+            calls.iter().all(|edge| edge.edge_id != test_edge_id("stale-call")),
             "pre-existing Calls edges should not be preserved without current resolution facts"
         );
     }
@@ -337,18 +354,18 @@ mod tests {
             id,
             NodeKind::Callable,
             NodeFact::Callable(sg::Callable {
-                callable_id: id.to_string(),
+                callable_id: test_id(id),
                 kind: sg::CallableKind::Function,
                 name: Some(id.to_string()),
                 qualified_name: id.to_string(),
-                artifact_id: "artifact".to_string(),
+                artifact_id: test_id("artifact"),
                 declaration_span: span(),
                 body_span: Some(span()),
                 signature: sg::Signature {
                     parameters: Vec::new(),
                     return_annotation: None,
                 },
-                scope_id: "scope".to_string(),
+                scope_id: test_id("scope"),
                 attributes: Vec::new(),
                 incoming_local_call_count: 0,
                 external_invocation_metadata: Vec::new(),
@@ -361,8 +378,8 @@ mod tests {
             id,
             NodeKind::Binding,
             NodeFact::Binding(Binding {
-                binding_id: id.to_string(),
-                scope_id: "scope".to_string(),
+                binding_id: test_id(id),
+                scope_id: test_id("scope"),
                 name: name.to_string(),
                 kind: BindingKind::Assignment,
                 target: BindingTarget::Value(name.to_string()),
@@ -376,7 +393,7 @@ mod tests {
             id,
             NodeKind::ExternalTarget,
             NodeFact::ExternalTarget(ExternalTarget {
-                external_target_id: id.to_string(),
+                external_target_id: test_id(id),
                 ecosystem: "test".to_string(),
                 package_name: None,
                 package_version: None,
@@ -394,9 +411,9 @@ mod tests {
             id,
             NodeKind::CallSite,
             NodeFact::CallSite(sg::CallSite {
-                call_site_id: id.to_string(),
-                artifact_id: "artifact".to_string(),
-                enclosing_callable_id: "caller".to_string(),
+                call_site_id: test_id(id),
+                artifact_id: test_id("artifact"),
+                enclosing_callable_id: test_id("caller"),
                 span: span(),
                 callee_expression: callee.to_string(),
                 argument_shape: sg::ArgumentShape {
@@ -411,9 +428,9 @@ mod tests {
 
     fn node(id: &str, kind: NodeKind, fact: NodeFact) -> GraphNode {
         GraphNode {
-            node_id: id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            node_id: test_id(id),
+            fact_id: None,
+            payload_hash: None,
             kind,
             owner: SourceOwnership::default(),
             span: Some(span()),
@@ -426,24 +443,24 @@ mod tests {
 
     fn resolves_to_edge(source_id: &str, target_id: &str, resolution: Resolution) -> GraphEdge {
         GraphEdge {
-            edge_id: format!("resolves:{source_id}:{target_id}:{resolution:?}"),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: test_edge_id(&format!("resolves:{source_id}:{target_id}:{resolution:?}")),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::ResolvesTo,
-            source_id: source_id.to_string(),
-            target_id: Some(target_id.to_string()),
+            source_id: test_id(source_id),
+            target_id: Some(test_id(target_id)),
             owner: SourceOwnership {
-                artifact_id: Some("artifact".to_string()),
+                artifact_id: Some(test_id("artifact")),
                 scope_id: None,
-                callable_id: Some("caller".to_string()),
+                callable_id: Some(test_id("caller")),
             },
             span: Some(span()),
             confidence: confidence_from_resolution(resolution),
             uncertainty: uncertainty_from_resolution(resolution),
             evidence: Vec::new(),
             fact: EdgeFact::ResolvesTo(sg::ResolvesTo {
-                binding_id: source_id.to_string(),
-                target_id: target_id.to_string(),
+                binding_id: test_id(source_id),
+                target_id: test_id(target_id),
                 resolution,
             }),
         }
@@ -457,23 +474,23 @@ mod tests {
         resolution: Resolution,
     ) -> GraphEdge {
         GraphEdge {
-            edge_id: edge_id.to_string(),
-            fact_id: String::new(),
-            payload_hash: String::new(),
+            edge_id: test_edge_id(edge_id),
+            fact_id: None,
+            payload_hash: None,
             kind: EdgeKind::Calls,
-            source_id: call_site_id.to_string(),
-            target_id: target_id.map(str::to_string),
+            source_id: test_id(call_site_id),
+            target_id: target_id.map(test_id),
             owner: SourceOwnership::default(),
             span: Some(span()),
             confidence: confidence_from_resolution(resolution),
             uncertainty: uncertainty_from_resolution(resolution),
             evidence: Vec::new(),
             fact: EdgeFact::Calls(sg::Calls {
-                caller_callable_id: "caller".to_string(),
-                callee_callable_id: target_id.map(str::to_string),
+                caller_callable_id: test_id("caller"),
+                callee_callable_id: target_id.map(test_id),
                 external_target_id: None,
                 unresolved_target: None,
-                call_site_id: call_site_id.to_string(),
+                call_site_id: test_id(call_site_id),
                 kind,
                 resolution,
             }),
@@ -495,11 +512,11 @@ mod tests {
                 matches!(
                     &edge.fact,
                     EdgeFact::Calls(calls)
-                        if calls.call_site_id == call_site_id
-                            && edge.source_id == call_site_id
-                            && edge.target_id.as_deref() == edge_target_id
-                            && calls.callee_callable_id.as_deref() == callee_callable_id
-                            && calls.external_target_id.as_deref() == external_target_id
+                        if calls.call_site_id == test_id(call_site_id)
+                            && edge.source_id == test_id(call_site_id)
+                            && edge.target_id == edge_target_id.map(test_id)
+                            && calls.callee_callable_id == callee_callable_id.map(test_id)
+                            && calls.external_target_id == external_target_id.map(test_id)
                             && calls.unresolved_target.as_deref() == unresolved_target
                             && calls.kind == kind
                             && calls.resolution == resolution

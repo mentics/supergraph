@@ -1099,7 +1099,7 @@ mod tests {
         fn resolve_call(
             &self,
             pending: &PendingCall,
-            _call_site_id: &str,
+            _call_site_id: NodeId,
             context: &GraphContext,
         ) -> ResolvedCall {
             if let Some(callee) =

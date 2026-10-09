@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use crate::ast::{StatementAst, StatementKind as AstStatementKind};
 use crate::supergraph::{
     self as sg, Confidence, EdgeFact, EdgeKind, Evidence, EvidenceKind, NodeFact, NodeId, NodeKind,
-    ProgramSupergraph, SourceOwnership, SyntaxReference, stable_id,
+    ProgramSupergraph, SourceOwnership, SyntaxReference, stable_edge_id, stable_id,
 };
 
+use crate::id_parts;
+use crate::supergraph::ids::Tag;
 use super::{
     SemanticCallable, SemanticContext, graph_edge, graph_node, insert_edge, insert_node,
     span_contains, span_key,
@@ -38,7 +40,7 @@ fn emit_callable(graph: &mut ProgramSupergraph, semantic: &SemanticCallable<'_>)
         insert_node(
             graph,
             graph_node(
-                statement_id.clone(),
+                statement_id,
                 NodeKind::Statement,
                 owner.clone(),
                 Some(statement.source_span),
@@ -46,7 +48,7 @@ fn emit_callable(graph: &mut ProgramSupergraph, semantic: &SemanticCallable<'_>)
                 evidence,
                 NodeFact::Statement(sg::Statement {
                     statement_id,
-                    callable_id: semantic.callable().callable_id.clone(),
+                    callable_id: semantic.callable().callable_id,
                     parent_statement_id,
                     kind: statement_kind(statement.kind),
                     ordinal: ordinals[index],
@@ -61,12 +63,12 @@ fn emit_callable(graph: &mut ProgramSupergraph, semantic: &SemanticCallable<'_>)
     for (index, statement_id) in statement_ids.iter().enumerate() {
         let container_id = parents[index]
             .map(|parent| statement_ids[parent].clone())
-            .unwrap_or_else(|| semantic.callable().callable_id.clone());
+            .unwrap_or_else(|| semantic.callable().callable_id);
         add_contains_edge(
             graph,
             semantic,
-            &container_id,
-            statement_id,
+            container_id,
+            *statement_id,
             &statements[index],
             owner.clone(),
         );
@@ -161,9 +163,8 @@ fn statement_ids(
         .iter()
         .enumerate()
         .map(|(index, statement)| {
-            stable_id(
-                "statement",
-                &[
+            stable_id(Tag::Statement,
+                id_parts![
                     &semantic.callable().callable_id,
                     statement_kind_key(statement.kind),
                     &span_key(statement.source_span),
@@ -193,28 +194,26 @@ fn child_statement_ids(
 fn add_contains_edge(
     graph: &mut ProgramSupergraph,
     semantic: &SemanticCallable<'_>,
-    container_id: &str,
-    member_id: &str,
+    container_id: NodeId,
+    member_id: NodeId,
     statement: &StatementAst,
     owner: SourceOwnership,
 ) {
     insert_edge(
         graph,
         graph_edge(
-            stable_id(
-                "edge",
-                &["contains", container_id, member_id, CONTAINMENT_PRECISION],
+            stable_edge_id(id_parts!["contains", container_id, member_id, CONTAINMENT_PRECISION],
             ),
             EdgeKind::Contains,
-            container_id.to_string(),
-            member_id.to_string(),
+            container_id,
+            member_id,
             owner,
             None,
             Confidence::Exact,
             parser_evidence(semantic, statement, "normalized statement containment"),
             EdgeFact::Contains(sg::Contains {
-                container_id: container_id.to_string(),
-                member_id: member_id.to_string(),
+                container_id: container_id,
+                member_id: member_id,
             }),
         ),
     );
@@ -222,9 +221,9 @@ fn add_contains_edge(
 
 fn statement_owner(semantic: &SemanticCallable<'_>) -> SourceOwnership {
     SourceOwnership {
-        artifact_id: Some(semantic.artifact().artifact_id.clone()),
-        scope_id: Some(semantic.callable().scope_id.clone()),
-        callable_id: Some(semantic.callable().callable_id.clone()),
+        artifact_id: Some(semantic.artifact().artifact_id),
+        scope_id: Some(semantic.callable().scope_id),
+        callable_id: Some(semantic.callable().callable_id),
     }
 }
 
@@ -236,7 +235,7 @@ fn parser_evidence(
     vec![Evidence {
         kind: EvidenceKind::Parser,
         summary: summary.to_string(),
-        source_id: Some(semantic.artifact().artifact_id.clone()),
+        source_id: Some(semantic.artifact().artifact_id),
         source_span: Some(statement.source_span),
         content_hash: semantic.artifact().content_hash.clone(),
         syntax: Some(SyntaxReference {
@@ -292,6 +291,7 @@ fn statement_kind_key(kind: AstStatementKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use crate::supergraph::ids::NodeId;
     use crate::analysis::source_graph::{build_python_supergraph, build_typescript_supergraph};
     use crate::ast::{
         CallAst, FileAst, ProjectAst, SourceSpan, StatementAst, StatementKind as AstStatementKind,
@@ -401,8 +401,8 @@ mod tests {
                 node.span,
                 Some(span_for_statement(statement.kind, statement.ordinal))
             );
-            assert!(!node.fact_id.is_empty());
-            assert!(!node.payload_hash.is_empty());
+            assert!(!node.fact_id.is_none());
+            assert!(!node.payload_hash.is_none());
             assert!(
                 node.evidence
                     .iter()
@@ -422,7 +422,7 @@ mod tests {
         assert!(
             contains_edges
                 .iter()
-                .any(|edge| edge.container_id == "sample:<module>")
+                .any(|edge| edge.container_id == crate::supergraph::ids::callable_id_from_text("sample:<module>"))
         );
         assert!(branch.1.child_statement_ids.iter().all(|child_id| {
             contains_edges.iter().any(|edge| {

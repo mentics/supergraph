@@ -26,7 +26,7 @@ fn parse_error_diagnostics(graph: &ProgramSupergraph) -> Vec<&supergraph::superg
 
 fn has_callable(graph: &ProgramSupergraph, name: &str) -> bool {
     graph.nodes.iter().any(|node| match &node.fact {
-        NodeFact::Callable(callable) => callable.callable_id.ends_with(name),
+        NodeFact::Callable(callable) => callable.qualified_name.ends_with(name),
         _ => false,
     })
 }

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{CallAst, DefinitionKind as AstDefinitionKind, RaiseAst, ReturnAst, SourceSpan};
+use crate::supergraph::ids::Tag;
 use crate::supergraph::{
     self as sg, Confidence, ExpressionKind, NodeFact, NodeId, NodeKind, ProgramSupergraph,
     ValueKind, ValueLiteral, ValueRole, stable_id,
@@ -50,10 +51,10 @@ fn emit_parameter_values(graph: &mut ProgramSupergraph, index: &CallableIndex, s
     let receiver_index = receiver_parameter_index(callable.kind, &parameters);
 
     for (ordinal, parameter) in parameters.iter().enumerate() {
-        let span = parameter_binding_span(index, &callable.scope_id, &parameter.name)
+        let span = parameter_binding_span(index, callable.scope_id, &parameter.name)
             .unwrap_or(callable.declaration_span);
         let value_id = value_id(
-            &callable.callable_id,
+            callable.callable_id,
             "formal-parameter",
             &parameter.name,
             Some(ordinal),
@@ -94,11 +95,11 @@ fn emit_parameter_values(graph: &mut ProgramSupergraph, index: &CallableIndex, s
         let span = receiver_index
             .and_then(|index| parameters.get(index))
             .and_then(|parameter| {
-                parameter_binding_span(index, &callable.scope_id, &parameter.name)
+                parameter_binding_span(index, callable.scope_id, &parameter.name)
             })
             .unwrap_or(callable.declaration_span);
         let value_id = value_id(
-            &callable.callable_id,
+            callable.callable_id,
             "receiver",
             &receiver_name,
             Some(receiver_ordinal),
@@ -133,7 +134,7 @@ fn emit_return_values(graph: &mut ProgramSupergraph, index: &CallableIndex, sema
     {
         let expression_id = expression_id_for_return(graph, index, semantic, return_fact);
         let value_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             "return",
             return_fact.value.as_deref().unwrap_or("return"),
             None,
@@ -173,7 +174,7 @@ fn emit_exception_values(graph: &mut ProgramSupergraph, index: &CallableIndex, s
     {
         let expression_id = expression_id_for_raise(graph, index, semantic, raise);
         let value_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             "exception",
             raise.value.as_deref().unwrap_or(&raise.text),
             None,
@@ -216,9 +217,9 @@ fn emit_call_values(
         };
         let call_expression_id = expression_id_for_call(graph, index, semantic, call);
         let result_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             "call-result",
-            &call_site.call_site_id,
+            call_site.call_site_id,
             None,
             Some(call.source_span),
         );
@@ -245,9 +246,9 @@ fn emit_call_values(
         );
 
         let exception_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             "call-exception",
-            &call_site.call_site_id,
+            call_site.call_site_id,
             None,
             Some(call.source_span),
         );
@@ -272,9 +273,9 @@ fn emit_call_values(
 
         if let Some(receiver) = &call.receiver {
             let receiver_id = value_id(
-                &semantic.callable().callable_id,
+                semantic.callable().callable_id,
                 "receiver-argument",
-                &call_site.call_site_id,
+                call_site.call_site_id,
                 Some(0),
                 Some(call.source_span),
             );
@@ -307,9 +308,9 @@ fn emit_call_values(
             );
         }
 
-        for argument in call_arguments(graph, index, call, call_expression_id.as_deref()) {
+        for argument in call_arguments(graph, index, call, call_expression_id) {
             let argument_id = value_id(
-                &semantic.callable().callable_id,
+                semantic.callable().callable_id,
                 "argument",
                 &format!(
                     "{}:{}",
@@ -366,7 +367,7 @@ fn emit_mutable_state_value(
     ordinal: Option<usize>,
 ) {
     let state_id = value_id(
-        &semantic.callable().callable_id,
+        semantic.callable().callable_id,
         "mutable-argument-state",
         &format!("{}:{state_of_value_id}", call_site.call_site_id),
         ordinal,
@@ -397,7 +398,7 @@ fn emit_literal_values(
     semantic: &SemanticCallable<'_>,
     expression_value_ids: &mut BTreeMap<NodeId, NodeId>,
 ) {
-    let expressions = expressions_for_callable(graph, index, &semantic.callable().callable_id);
+    let expressions = expressions_for_callable(graph, index, semantic.callable().callable_id);
     for expression in expressions
         .into_iter()
         .filter(|expression| expression.kind == ExpressionKind::Literal)
@@ -405,10 +406,10 @@ fn emit_literal_values(
         if expression_value_ids.contains_key(&expression.expression_id) {
             continue;
         }
-        let span = expression_span(index, &expression.expression_id);
+        let span = expression_span(index, expression.expression_id);
         let literal = expression.normalized.literal.clone();
         let value_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             "literal",
             expression.original_text.as_deref().unwrap_or("literal"),
             None,
@@ -441,19 +442,19 @@ fn emit_expression_values(
     semantic: &SemanticCallable<'_>,
     expression_value_ids: &mut BTreeMap<NodeId, NodeId>,
 ) {
-    let expressions = expressions_for_callable(graph, index, &semantic.callable().callable_id);
+    let expressions = expressions_for_callable(graph, index, semantic.callable().callable_id);
     for expression in expressions {
         if expression_value_ids.contains_key(&expression.expression_id) {
             continue;
         }
-        let Some(span) = expression_span(index, &expression.expression_id) else {
+        let Some(span) = expression_span(index, expression.expression_id) else {
             continue;
         };
         let (kind, confidence, evidence) = expression_value_shape(&expression);
         let value_id = value_id(
-            &semantic.callable().callable_id,
+            semantic.callable().callable_id,
             &format!("expression-{}", expression_kind_key(expression.kind)),
-            &expression.expression_id,
+            expression.expression_id,
             Some(expression.ordinal),
             Some(span),
         );
@@ -497,7 +498,7 @@ fn apply_expression_value_ids(
 
 fn apply_definition_value_ids(graph: &mut ProgramSupergraph, index: &CallableIndex, semantic: &SemanticCallable<'_>) {
     let callable_id = semantic.callable().callable_id.clone();
-    let parameter_values = values_for_callable(graph, index, &callable_id)
+    let parameter_values = values_for_callable(graph, index, callable_id)
         .into_iter()
         .filter(|value| value.role == ValueRole::FormalParameter)
         .filter_map(|value| {
@@ -507,12 +508,12 @@ fn apply_definition_value_ids(graph: &mut ProgramSupergraph, index: &CallableInd
                 .map(|name| (name, value.value_id.clone()))
         })
         .collect::<BTreeMap<_, _>>();
-    let expressions = expressions_for_callable(graph, index, &callable_id);
+    let expressions = expressions_for_callable(graph, index, callable_id);
     let expression_values_by_span = expressions
         .iter()
         .filter_map(|expression| {
             Some((
-                expression_span(index, &expression.expression_id)?,
+                expression_span(index, expression.expression_id)?,
                 expression.clone(),
             ))
         })
@@ -572,11 +573,11 @@ fn apply_definition_value_ids(graph: &mut ProgramSupergraph, index: &CallableInd
 
 fn apply_use_value_ids(graph: &mut ProgramSupergraph, index: &CallableIndex, semantic: &SemanticCallable<'_>) {
     let callable_id = semantic.callable().callable_id.clone();
-    let values_by_expression_span = expressions_for_callable(graph, index, &callable_id)
+    let values_by_expression_span = expressions_for_callable(graph, index, callable_id)
         .into_iter()
         .filter_map(|expression| {
             Some((
-                expression_span(index, &expression.expression_id)?,
+                expression_span(index, expression.expression_id)?,
                 expression.value_id.clone()?,
             ))
         })
@@ -720,19 +721,19 @@ fn expression_kind_key(kind: ExpressionKind) -> &'static str {
     }
 }
 
-fn value_id(
-    callable_id: &str,
+fn value_id<'a>(
+    callable_id: NodeId,
     role_key: &str,
-    semantic_key: &str,
+    semantic_key: impl Into<crate::supergraph::ids::IdPart<'a>>,
     ordinal: Option<usize>,
     span: Option<SourceSpan>,
 ) -> NodeId {
     stable_id(
-        "value",
-        &[
+        Tag::Value,
+        crate::id_parts![
             callable_id,
             role_key,
-            semantic_key,
+            semantic_key.into(),
             &ordinal
                 .map(|ordinal| ordinal.to_string())
                 .unwrap_or_default(),
@@ -743,7 +744,7 @@ fn value_id(
 
 fn parameter_binding_span(
     index: &CallableIndex,
-    scope_id: &str,
+    scope_id: NodeId,
     parameter_name: &str,
 ) -> Option<SourceSpan> {
     index.parameter_binding_span(scope_id, parameter_name)
@@ -793,7 +794,7 @@ fn expression_id_for_return(
     expression_id_for_text_in_span(
         graph,
         index,
-        &semantic.callable().callable_id,
+        semantic.callable().callable_id,
         return_fact.value.as_deref(),
         return_fact.source_span,
     )
@@ -807,7 +808,7 @@ fn expression_id_for_raise(
     expression_id_for_text_in_span(
         graph,
         index,
-        &semantic.callable().callable_id,
+        semantic.callable().callable_id,
         raise.value.as_deref(),
         raise.source_span,
     )
@@ -839,7 +840,7 @@ fn receiver_expression_id(
     expression_id_for_text_in_span(
         graph,
         index,
-        &semantic.callable().callable_id,
+        semantic.callable().callable_id,
         call.receiver.as_deref(),
         call.source_span,
     )
@@ -847,7 +848,7 @@ fn receiver_expression_id(
 
 fn expression_id_for_text_in_span(
     graph: &ProgramSupergraph, index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
     text: Option<&str>,
     enclosing_span: SourceSpan,
 ) -> Option<NodeId> {
@@ -873,7 +874,7 @@ fn expression_id_for_text_in_span(
 fn call_arguments(
     graph: &ProgramSupergraph, index: &CallableIndex,
     call: &CallAst,
-    call_expression_id: Option<&str>,
+    call_expression_id: Option<NodeId>,
 ) -> Vec<ArgumentValue> {
     let mut direct_children = call_expression_id
         .and_then(|expression_id| expression_by_id(graph, index, expression_id))
@@ -881,7 +882,7 @@ fn call_arguments(
             call_expression
                 .child_expression_ids
                 .iter()
-                .filter_map(|child_id| expression_by_id(graph, index, child_id))
+                .filter_map(|child_id| expression_by_id(graph, index, *child_id))
                 .filter(|expression| {
                     expression.original_text.as_deref() != Some(call.callee.as_str())
                 })
@@ -894,7 +895,7 @@ fn call_arguments(
         })
         .unwrap_or_default();
     direct_children.sort_by_key(|expression| {
-        expression_span(index, &expression.expression_id).unwrap_or(call.source_span)
+        expression_span(index, expression.expression_id).unwrap_or(call.source_span)
     });
 
     let total_count = call.args_count;
@@ -925,7 +926,7 @@ fn call_arguments(
                 .map(|expression| expression.expression_id.clone()),
             span: expression
                 .as_ref()
-                .and_then(|expression| expression_span(index, &expression.expression_id))
+                .and_then(|expression| expression_span(index, expression.expression_id))
                 .or(Some(call.source_span)),
             literal: expression.and_then(|expression| expression.normalized.literal),
         });
@@ -940,7 +941,7 @@ fn call_arguments(
             ordinal,
             name: None,
             expression_id: Some(expression.expression_id.clone()),
-            span: expression_span(index, &expression.expression_id),
+            span: expression_span(index, expression.expression_id),
             literal: expression.normalized.literal,
         });
     }
@@ -951,7 +952,7 @@ fn call_arguments(
 fn expressions_for_callable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Vec<sg::Expression> {
     index
         .nodes(graph, callable_id)
@@ -965,7 +966,7 @@ fn expressions_for_callable(
 fn expression_by_id(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    expression_id: &str,
+    expression_id: NodeId,
 ) -> Option<sg::Expression> {
     let node = &graph.nodes[index.expression_position(expression_id)?];
     match &node.fact {
@@ -977,7 +978,7 @@ fn expression_by_id(
 fn values_for_callable(
     graph: &ProgramSupergraph,
     index: &CallableIndex,
-    callable_id: &str,
+    callable_id: NodeId,
 ) -> Vec<sg::Value> {
     index
         .nodes(graph, callable_id)
@@ -988,7 +989,7 @@ fn values_for_callable(
         .collect()
 }
 
-fn expression_span(index: &CallableIndex, expression_id: &str) -> Option<SourceSpan> {
+fn expression_span(index: &CallableIndex, expression_id: NodeId) -> Option<SourceSpan> {
     index.expression_span(expression_id)
 }
 
@@ -1071,9 +1072,9 @@ mod tests {
                 .iter()
                 .find(|edge| edge.kind == kind)
                 .unwrap_or_else(|| panic!("missing edge kind {kind:?}"));
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
-                edge.target_id.as_ref().and_then(|id| node_kind(graph, id)),
+                edge.target_id.as_ref().and_then(|id| node_kind(graph, *id)),
                 Some(NodeKind::Value),
                 "{kind:?} target should be a value"
             );
@@ -1083,16 +1084,16 @@ mod tests {
             .iter()
             .filter(|edge| edge.kind == EdgeKind::ParameterOut)
         {
-            assert_eq!(node_kind(graph, &edge.source_id), Some(NodeKind::Value));
+            assert_eq!(node_kind(graph, edge.source_id), Some(NodeKind::Value));
             assert_eq!(
-                edge.target_id.as_ref().and_then(|id| node_kind(graph, id)),
+                edge.target_id.as_ref().and_then(|id| node_kind(graph, *id)),
                 Some(NodeKind::Value),
                 "ParameterOut target should be a value when mutation summaries exist"
             );
         }
     }
 
-    fn node_kind(graph: &crate::supergraph::ProgramSupergraph, node_id: &str) -> Option<NodeKind> {
+    fn node_kind(graph: &crate::supergraph::ProgramSupergraph, node_id: crate::supergraph::NodeId) -> Option<NodeKind> {
         graph
             .nodes
             .iter()
