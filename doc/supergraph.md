@@ -84,6 +84,8 @@ Typical node families:
 
 - `Artifact`: source file, test file, schema, config, generated output, or other
   `dev artifact`.
+- `Container`: a unit above the file level: directory, workspace, package, Rust
+  crate, or Python import package. See `doc/ast-to-supergraph.md`.
 - `Scope`: module, class, function, block, catch block, comprehension, or
   language-specific scope normalized into shared categories.
 - `Callable`: function, method, constructor, closure, lambda, module initializer,

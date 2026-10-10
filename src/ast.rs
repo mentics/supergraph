@@ -4,6 +4,105 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectAst {
     pub root: String,
     pub files: Vec<FileAst>,
+    /// Package and workspace manifests (`Cargo.toml`, `package.json`, `pyproject.toml`, ...) for
+    /// the analyzed language's ecosystem, found under the root and in enclosing directories up
+    /// to the repository root.
+    pub manifests: Vec<ManifestAst>,
+}
+
+/// A parsed package-manager manifest. Paths are relative to the analysis root, use `/`, and
+/// may start with `..` for manifests in enclosing directories; `.` is the root itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestAst {
+    pub path: String,
+    pub dir: String,
+    pub format: ManifestFormat,
+    /// The distributable unit this manifest declares, if any.
+    pub package: Option<PackageAst>,
+    /// The workspace this manifest declares, if any.
+    pub workspace: Option<WorkspaceAst>,
+}
+
+/// Package ecosystem of the language being analyzed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Ecosystem {
+    Cargo,
+    Npm,
+    Python,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ManifestFormat {
+    CargoToml,
+    PackageJson,
+    PnpmWorkspaceYaml,
+    PyprojectToml,
+    SetupCfg,
+    SetupPy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageAst {
+    pub name: String,
+    pub version: Option<String>,
+    /// Compilation targets (Cargo only), each with its root source file.
+    pub targets: Vec<TargetAst>,
+    /// Source files the manifest names as entry points (npm `main`, `module`, `bin`).
+    pub entry_files: Vec<String>,
+    pub dependencies: Vec<DependencyAst>,
+    /// Manifest path of the workspace this package is a member of (possibly its own manifest).
+    pub workspace_manifest: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceAst {
+    /// Member patterns exactly as written, relative to the workspace directory.
+    pub members: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetAst {
+    pub name: String,
+    pub kind: TargetKind,
+    /// Root source file, relative to the analysis root.
+    pub root_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum TargetKind {
+    Lib,
+    Bin,
+    Example,
+    Test,
+    Bench,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyAst {
+    /// The depended-on package's own name (after any rename).
+    pub name: String,
+    /// Local name when the manifest renames the dependency.
+    pub rename: Option<String>,
+    /// Version requirement or specifier as written.
+    pub requirement: Option<String>,
+    pub kind: DependencyKind,
+    pub optional: bool,
+    /// Directory of a local path dependency, relative to the analysis root.
+    pub path: Option<String>,
+    /// Version is inherited from the enclosing workspace.
+    pub workspace: bool,
+    /// Optional-dependency or dependency group the entry was declared under.
+    pub group: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum DependencyKind {
+    Normal,
+    Dev,
+    Build,
+    Peer,
+    Optional,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

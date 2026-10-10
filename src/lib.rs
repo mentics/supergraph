@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod ast;
 mod fs;
+mod manifest;
 mod parser;
 pub mod supergraph;
 pub mod intern;

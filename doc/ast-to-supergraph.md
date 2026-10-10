@@ -71,6 +71,62 @@ Required payload:
 
 The builder stores artifacts as `GraphNode` records with `NodeFact::Artifact`.
 
+An artifact also records the containers it belongs to (see below):
+`directory_id`, `package_id`, `crate_id` (Rust) and `import_package_id`
+(Python). All are plain references, not edges.
+
+### Container
+
+A container is a unit above the file level. Containers are stored as
+`GraphNode` records with `NodeFact::Container`, with no owning artifact. Two
+relations are recorded on each one, both as plain ids so that edges between
+containers can be derived later:
+
+- `directory_id`: the directory container where it lives (`None` for
+  directories themselves and for manifests above the analysis root).
+- `parent_container_id`: its logical parent.
+
+| Kind | Source | Logical parent |
+| --- | --- | --- |
+| `Directory` | every directory holding a source file or a manifest, plus the root | parent directory |
+| `Workspace` | Cargo `[workspace]`, npm/yarn `workspaces`, `pnpm-workspace.yaml`, `[tool.uv.workspace]` | none |
+| `Package` | Cargo `[package]`, `package.json`, `pyproject.toml` (`[project]`, Poetry), `setup.cfg`, `setup.py` | the workspace whose members select it |
+| `Crate` | one per Cargo target: lib, bin, example, test, bench (explicit or autodiscovered) | its package |
+| `ImportPackage` | Python directory with `__init__.py` | parent import package, else the enclosing package |
+
+Which manifests are read depends on the language: Rust reads Cargo, TypeScript
+reads npm and pnpm, Python reads `pyproject.toml`, `setup.cfg` and `setup.py`
+(first one declaring a package wins per directory). Manifests are searched under
+the analysis root and in enclosing directories up to the repository root (the
+nearest directory with `.git`). A manifest that fails to parse is skipped.
+
+Payload beyond the identifying fields:
+
+- `name`, `path` (directory relative to the analysis root, `.` for the root and
+  `..`-prefixed above it), `manifest_path`, `version`, `ecosystem`.
+- Crates: `target_kind`, `root_artifact_id` and `module_path` of the root file.
+- Import packages: `root_artifact_id` and `module_path` of `__init__.py`.
+- Packages: `entry_files` (npm `main`, `module`, `bin`) and `dependencies`.
+  Each dependency has `name`, `rename`, `requirement`, `kind`, `optional`,
+  `path`, `workspace`, `group`, and `resolved_container_id` when it names a
+  package in the analyzed project (by path, else by unique name).
+- Workspaces: `workspace_members` and `workspace_exclude` patterns as written.
+
+Membership rules:
+
+- `package_id`: the package whose directory most specifically contains the file.
+- `crate_id`: Rust only. `lib.rs` and `main.rs` own their directory subtree; any
+  other target root owns itself and the directory named after it. The most
+  specific claim wins, then lib before bin before example, test, bench. This is
+  a layout heuristic, not a resolution of `mod` declarations, so a file reached
+  through several crates is attributed to one of them.
+- `import_package_id`: Python only, set when the file's own directory has an
+  `__init__.py`.
+
+Not covered: TypeScript project references and `tsconfig` paths, Python
+packages listed in build backends (`tool.setuptools`, Hatch, Poetry
+`packages`), Cargo features and `[patch]`, and inline `mod` blocks.
+
 ### Source Span
 
 Every extracted fact should keep an exact location.

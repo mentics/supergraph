@@ -1468,6 +1468,7 @@ pub fn seed_values_for_behavior(graph: &ProgramSupergraph, behavior_id: NodeId) 
             }
         }
         NodeFact::Artifact(_)
+        | NodeFact::Container(_)
         | NodeFact::Scope(_)
         | NodeFact::Binding(_)
         | NodeFact::Callable(_)

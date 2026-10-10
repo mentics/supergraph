@@ -566,6 +566,7 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&directory);
         ProjectAst {
+            manifests: Vec::new(),
             root: "repo".to_string(),
             files: parsed,
         }

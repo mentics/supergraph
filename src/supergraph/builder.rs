@@ -16,7 +16,7 @@ use std::num::NonZeroU64;
 
 use super::schema::{
     Artifact, BasicBlock, Binding, Binds, CallSite, Callable, Calls, Condition, Conditions,
-    Confidence, Contains, ControlFlow, Controls, DataFlow, DecomposesTo, Defines, Definition,
+    Confidence, Contains, Container, ControlFlow, Controls, DataFlow, DecomposesTo, Defines, Definition,
     DependsOnDomainKnowledge, Diagnostic, DomainKnowledge, EdgeFact, EdgeKind, Evidence,
     Expression, ExternalTarget, GraphEdge, GraphIndexes, GraphNode, NodeFact, NodeId, NodeKind,
     Orders, ParameterIn, ParameterOut, ProgramSupergraph, ResolvesTo, ReturnsTo, SCHEMA_VERSION,
@@ -104,6 +104,27 @@ impl ProgramSupergraphBuilder {
             uncertainty: Uncertainty::Exact,
             evidence,
             fact: NodeFact::Artifact(artifact),
+        });
+        node_id
+    }
+
+    pub fn add_container(&mut self, container: Container, evidence: Vec<Evidence>) -> NodeId {
+        let node_id = container.container_id.clone();
+        self.insert_node(GraphNode {
+            node_id: node_id.clone(),
+            fact_id: None,
+            payload_hash: None,
+            kind: NodeKind::Container,
+            owner: SourceOwnership {
+                artifact_id: None,
+                scope_id: None,
+                callable_id: None,
+            },
+            span: None,
+            confidence: Confidence::Exact,
+            uncertainty: Uncertainty::Exact,
+            evidence,
+            fact: NodeFact::Container(Box::new(container)),
         });
         node_id
     }
@@ -1829,7 +1850,7 @@ mod tests {
     use crate::supergraph::ids::test_support::test_id;
     use crate::supergraph::schema::{
         ArgumentShape, BasicBlockKind, BindingKind, BindingTarget, CallEdgeKind, CallableKind,
-        ConditionKind, Conditions, ControlFlow, ControlFlowKind, ControlFlowNode,
+        ConditionKind, Conditions, ContainerDependency, ContainerKind, ControlFlow, ControlFlowKind, ControlFlowNode,
         ControlFlowNodeRole, Controls, DataFlow, DataFlowKind, DataFlowNode, DataFlowNodeRole,
         DecomposesTo, Defines, DefinitionKind, DependsOnDomainKnowledge, DiagnosticKind,
         DispatchKind, DomainKnowledgeScope, DomainKnowledgeSource, DomainKnowledgeStatus,
@@ -1837,7 +1858,7 @@ mod tests {
         NormalizedExpression, Orders, ParameterIn, ParameterOut, Requirement, RequirementKind,
         Resolution, ReturnsTo, Scope, ScopeBindingBehavior, ScopeKind, ScopeVariant, Severity,
         Signature, StatementKind, SymbolKind, ThrowsTo, ThrowsToTargetKind, TracesTo, Uncertainty,
-        UseKind, Uses, ValueKind, ValueLiteral, ValueRole,
+        UseKind, Uses, ValueKind, ValueLiteral, ValueRole, DependencyKind, Ecosystem,
     };
 
     #[test]
@@ -2113,6 +2134,10 @@ mod tests {
                 path: Sym::new("src/main.py"),
                 module_path: Sym::new("main"),
                 content_hash: Some(Sym::new("sha256:source-v1")),
+                directory_id: None,
+                package_id: None,
+                crate_id: None,
+                import_package_id: None,
             },
             Vec::new(),
         );
@@ -2325,6 +2350,10 @@ mod tests {
                 path: Sym::new("main.py"),
                 module_path: Sym::new("main"),
                 content_hash: Some(Sym::new("sha256:sg013")),
+                directory_id: None,
+                package_id: None,
+                crate_id: None,
+                import_package_id: None,
             },
             Vec::new(),
         );
@@ -2520,6 +2549,7 @@ mod tests {
 
         let expected_nodes = [
             (NodeKind::Artifact, ids.artifact),
+            (NodeKind::Container, ids.container),
             (NodeKind::Scope, ids.scope),
             (NodeKind::Binding, ids.binding),
             (NodeKind::Callable, ids.callable),
@@ -2541,7 +2571,7 @@ mod tests {
         ];
         assert_eq!(
             expected_nodes.len(),
-            19,
+            20,
             "all NodeKind families must be listed"
         );
 
@@ -2781,6 +2811,7 @@ mod tests {
     #[derive(Debug)]
     struct Sg120FixtureIds {
         artifact: NodeId,
+        container: NodeId,
         scope: NodeId,
         binding: NodeId,
         callable: NodeId,
@@ -2831,6 +2862,7 @@ mod tests {
     fn sg120_schema_fixture() -> (ProgramSupergraph, Sg120FixtureIds, SourceSpan) {
         let span = span(10, 20);
         let artifact = test_id("artifact:sg120");
+        let container = test_id("container:sg120.package");
         let scope = test_id("scope:sg120.module");
         let binding = test_id("binding:sg120.handler");
         let callable = test_id("callable:sg120.handler");
@@ -2879,6 +2911,10 @@ mod tests {
                 path: Sym::new("sg120.py"),
                 module_path: Sym::new("sg120"),
                 content_hash: Some(Sym::new("sha256:sg120")),
+                directory_id: None,
+                package_id: None,
+                crate_id: None,
+                import_package_id: None,
             }),
         ));
         builder.insert_node(schema_node(
@@ -3298,6 +3334,42 @@ mod tests {
             ));
         }
         builder.insert_node(schema_node(
+            container.clone(),
+            NodeKind::Container,
+            artifact_owner.clone(),
+            None,
+            Confidence::Exact,
+            schema_evidence(artifact, "container", None),
+            NodeFact::Container(Box::new(Container {
+                container_id: container.clone(),
+                kind: ContainerKind::Package,
+                ecosystem: Some(Ecosystem::Python),
+                name: Sym::new("sg120"),
+                path: Sym::new("."),
+                directory_id: None,
+                parent_container_id: None,
+                manifest_path: Some(Sym::new("pyproject.toml")),
+                version: Some(Sym::new("1.0")),
+                module_path: None,
+                root_artifact_id: Some(artifact.clone()),
+                target_kind: None,
+                entry_files: Vec::new(),
+                workspace_members: Vec::new(),
+                workspace_exclude: Vec::new(),
+                dependencies: vec![ContainerDependency {
+                    name: Sym::new("requests"),
+                    rename: None,
+                    requirement: Some(Sym::new(">=2")),
+                    kind: DependencyKind::Normal,
+                    optional: false,
+                    path: None,
+                    workspace: false,
+                    group: None,
+                    resolved_container_id: Some(container.clone()),
+                }],
+            })),
+        ));
+        builder.insert_node(schema_node(
             diagnostic.clone(),
             NodeKind::Diagnostic,
             artifact_owner.clone(),
@@ -3584,6 +3656,7 @@ mod tests {
                 child_requirement,
                 condition_requirement,
                 diagnostic,
+                container,
                 contains,
                 binds,
                 resolves_to,
@@ -3652,6 +3725,7 @@ mod tests {
     fn node_fact_kind(fact: &NodeFact) -> NodeKind {
         match fact {
             NodeFact::Artifact(_) => NodeKind::Artifact,
+            NodeFact::Container(_) => NodeKind::Container,
             NodeFact::Scope(_) => NodeKind::Scope,
             NodeFact::Binding(_) => NodeKind::Binding,
             NodeFact::Callable(_) => NodeKind::Callable,
@@ -3712,6 +3786,10 @@ mod tests {
                 path: Sym::new("main.py"),
                 module_path: Sym::new("main"),
                 content_hash: None,
+                directory_id: None,
+                package_id: None,
+                crate_id: None,
+                import_package_id: None,
             },
             Vec::new(),
         );

@@ -1280,6 +1280,7 @@ mod tests {
             "if (fatal) {\n  throw fatal;\n}"
         };
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),

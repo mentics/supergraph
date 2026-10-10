@@ -3406,6 +3406,7 @@ mod tests {
 
     fn project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -3446,6 +3447,7 @@ mod tests {
 
     fn sg054_unreachable_project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -3684,6 +3686,7 @@ mod tests {
 
     fn sg051_exit_project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -3842,6 +3845,7 @@ mod tests {
 
     fn sg051_finally_project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -3910,6 +3914,7 @@ mod tests {
 
     fn sg121_switch_match_fallback_project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),

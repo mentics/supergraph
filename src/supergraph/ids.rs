@@ -240,6 +240,7 @@ tags! {
     Callable => "callable",
     CfgNode => "cfg-node",
     Condition => "condition",
+    Container => "container",
     Definition => "definition",
     DataFlowNode => "df-node",
     Diagnostic => "diagnostic",

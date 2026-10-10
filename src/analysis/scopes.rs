@@ -869,6 +869,7 @@ mod tests {
         python: bool,
     ) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),

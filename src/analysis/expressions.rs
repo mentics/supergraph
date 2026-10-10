@@ -669,6 +669,7 @@ mod tests {
 
     fn project(path: &str, owner_id: &str, python: bool) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),

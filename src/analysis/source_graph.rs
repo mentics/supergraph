@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::ast::{CallAst, FileAst, ProjectAst, SourceSpan, SymbolAst, SymbolKind};
 use crate::supergraph::{
     ArgumentShape, Artifact, Binding, BindingKind, BindingTarget, CallEdgeKind, CallSite, Callable,
-    CallableKind, Calls, Confidence, Diagnostic, DiagnosticKind, Evidence, EvidenceKind,
+    CallableKind, Calls, Confidence, ContainerKind, Diagnostic, DiagnosticKind, Evidence, EvidenceKind,
     ProgramSupergraph, ProgramSupergraphBuilder, Resolution, Scope, ScopeBindingBehavior,
     ScopeKind, ScopeVariant, Severity, Signature, SourceOwnership, stable_id,
 };
@@ -14,6 +14,7 @@ use crate::id_parts;
 use crate::supergraph::ids::{IdPart, NodeId, Tag, callable_id_from_text};
 
 mod adapter;
+mod containers;
 mod python;
 mod rust;
 mod typescript;
@@ -57,6 +58,7 @@ pub(crate) struct SourceGraphLowerer<A> {
     short_class_names: BTreeMap<String, Vec<String>>,
     pending_calls: Vec<PendingCall>,
     incoming_local_call_counts: BTreeMap<NodeId, usize>,
+    file_containers: BTreeMap<String, containers::FileContainers>,
 }
 
 impl<A> SourceGraphLowerer<A>
@@ -76,6 +78,7 @@ where
             short_class_names: BTreeMap::new(),
             pending_calls: Vec::new(),
             incoming_local_call_counts: BTreeMap::new(),
+            file_containers: BTreeMap::new(),
         }
     }
 
@@ -83,6 +86,20 @@ where
         for file in &project.files {
             self.local_modules
                 .insert(self.adapter.module_path(project, &file.path));
+        }
+
+        let plan = containers::plan_containers(project, self.adapter.language(), |path| {
+            self.adapter.module_path(project, path)
+        });
+        self.file_containers = plan.by_file;
+        for container in plan.containers {
+            let summary = match container.kind {
+                ContainerKind::Directory => "source directory".to_string(),
+                ContainerKind::ImportPackage => "directory with __init__.py".to_string(),
+                _ => format!("manifest {}", container.manifest_path.as_deref().unwrap_or_default()),
+            };
+            let evidence = vec![self.source_evidence(summary, None)];
+            self.builder.add_container(container, evidence);
         }
 
         for file in &project.files {
@@ -124,6 +141,7 @@ where
         let module_initializer_id: NodeId =
             callable_id_from_text(&format!("{module_path}:<module>"));
         let module_span = module_span(file);
+        let containers = self.file_containers.get(&file.path).cloned().unwrap_or_default();
 
         self.builder.add_artifact(
             Artifact {
@@ -131,6 +149,10 @@ where
                 path: Sym::from(file.path.clone()),
                 module_path: Sym::from(module_path.clone()),
                 content_hash: None,
+                directory_id: containers.directory_id,
+                package_id: containers.package_id,
+                crate_id: containers.crate_id,
+                import_package_id: containers.import_package_id,
             },
             vec![self.source_evidence("source artifact", Some(module_span))],
         );
@@ -1144,6 +1166,7 @@ mod tests {
 
     fn metadata_project() -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: "sample.py".to_string(),

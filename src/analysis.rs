@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::{
-    ast::{CallAst, ProjectAst, SourceSpan, SymbolAst, SymbolKind},
+    ast::{CallAst, Ecosystem, ProjectAst, SourceSpan, SymbolAst, SymbolKind},
+    manifest::discover_manifests,
     fs::{
         PythonSourceFile, RustSourceFile, TypeScriptSourceFile, discover_python_files,
         discover_rust_files, discover_typescript_files,
@@ -94,9 +95,14 @@ pub fn analyze_python_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
         })
     })?;
 
+    let manifests = timing::stage("discover manifests", || {
+        discover_manifests(&analysis_root(&root), Ecosystem::Python, root.is_file())
+    })?;
+
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
         files: parsed_files,
+        manifests,
     })
 }
 
@@ -133,9 +139,14 @@ pub fn analyze_rust_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
         })
     })?;
 
+    let manifests = timing::stage("discover manifests", || {
+        discover_manifests(&analysis_root(&root), Ecosystem::Cargo, root.is_file())
+    })?;
+
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
         files: parsed_files,
+        manifests,
     })
 }
 
@@ -172,9 +183,14 @@ pub fn analyze_typescript_path(path: impl AsRef<Path>) -> Result<ProjectAst> {
         })
     })?;
 
+    let manifests = timing::stage("discover manifests", || {
+        discover_manifests(&analysis_root(&root), Ecosystem::Npm, root.is_file())
+    })?;
+
     Ok(ProjectAst {
         root: analysis_root(&root).display().to_string(),
         files: parsed_files,
+        manifests,
     })
 }
 

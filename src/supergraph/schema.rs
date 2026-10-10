@@ -260,6 +260,7 @@ pub struct GraphEdge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum NodeKind {
     Artifact,
+    Container,
     Scope,
     Binding,
     Callable,
@@ -305,6 +306,7 @@ pub enum EdgeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeFact {
     Artifact(Artifact),
+    Container(Box<Container>),
     Scope(Box<Scope>),
     Binding(Binding),
     Callable(Box<Callable>),
@@ -484,6 +486,82 @@ pub struct Artifact {
     pub path: Sym,
     pub module_path: Sym,
     pub content_hash: Option<Sym>,
+    /// Directory the file lives in.
+    pub directory_id: Option<NodeId>,
+    /// Nearest enclosing manifest-declared package (Cargo package, npm package, Python project).
+    pub package_id: Option<NodeId>,
+    /// Rust: the crate target whose module tree holds this file (library preferred over binary).
+    pub crate_id: Option<NodeId>,
+    /// Python: the import package this file belongs to, when its directory has `__init__.py`.
+    pub import_package_id: Option<NodeId>,
+}
+
+/// A unit above the file level: a directory, a package, a crate, a workspace.
+///
+/// Two relations are recorded. `directory_id` is the physical location, and
+/// `parent_container_id` is the logical parent: a directory's parent directory, a package's
+/// workspace, a crate's package, an import package's parent import package (or the package that
+/// holds a top-level one). Neither is stored as an edge; both are plain references.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Container {
+    pub container_id: NodeId,
+    pub kind: ContainerKind,
+    pub ecosystem: Option<Ecosystem>,
+    pub name: Sym,
+    /// Directory relative to the analysis root: `.` for the root, `..`-prefixed above it.
+    pub path: Sym,
+    pub directory_id: Option<NodeId>,
+    pub parent_container_id: Option<NodeId>,
+    /// Manifest that declares this container, relative to the analysis root.
+    pub manifest_path: Option<Sym>,
+    pub version: Option<Sym>,
+    /// Module path of the root file: a crate's `lib.rs`/`main.rs`, an import package's
+    /// `__init__.py`.
+    pub module_path: Option<Sym>,
+    /// File the module tree starts from (crate root, `__init__.py`).
+    pub root_artifact_id: Option<NodeId>,
+    pub target_kind: Option<TargetKind>,
+    /// Entry files the manifest names (npm `main`, `module`, `bin`), relative to the root.
+    pub entry_files: Vec<Sym>,
+    /// Member patterns, for workspaces.
+    pub workspace_members: Vec<Sym>,
+    pub workspace_exclude: Vec<Sym>,
+    /// Declared dependencies, for packages.
+    pub dependencies: Vec<ContainerDependency>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ContainerKind {
+    Directory,
+    /// Set of packages managed together (Cargo workspace, npm/pnpm workspace, uv workspace).
+    Workspace,
+    /// Distributable unit declared by a manifest (Cargo package, npm package, Python project).
+    Package,
+    /// Rust compilation target: a library, binary, example, test or bench.
+    Crate,
+    /// Python import package: a directory with `__init__.py`.
+    ImportPackage,
+}
+
+pub use crate::ast::{DependencyKind, Ecosystem, TargetKind};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerDependency {
+    /// Name of the depended-on package.
+    pub name: Sym,
+    pub rename: Option<Sym>,
+    pub requirement: Option<Sym>,
+    pub kind: DependencyKind,
+    pub optional: bool,
+    /// Directory of a local path dependency, relative to the analysis root.
+    pub path: Option<Sym>,
+    /// Version comes from the enclosing workspace.
+    pub workspace: bool,
+    /// Extras or dependency group the entry was declared under.
+    pub group: Option<Sym>,
+    /// The package container this resolves to when it names a package in the analyzed
+    /// project (by path, or else by name within the same ecosystem).
+    pub resolved_container_id: Option<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2817,6 +2817,10 @@ mod tests {
                 path: Sym::from(path.to_string()),
                 module_path: Sym::from("sample".to_string()),
                 content_hash: Some(Sym::from(format!("sha256:sg080:{language}"))),
+                directory_id: None,
+                package_id: None,
+                crate_id: None,
+                import_package_id: None,
             },
             Vec::new(),
         );

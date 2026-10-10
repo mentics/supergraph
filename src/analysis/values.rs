@@ -1104,6 +1104,7 @@ mod tests {
 
     fn python_project() -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: "sample.py".to_string(),
@@ -1301,6 +1302,7 @@ mod tests {
 
     fn typescript_project() -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: "sample.ts".to_string(),

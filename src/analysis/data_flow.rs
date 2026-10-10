@@ -2814,6 +2814,7 @@ mod tests {
 
     fn project(path: &str) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -2925,6 +2926,7 @@ mod tests {
 
     fn sg073_project(path: &str) -> ProjectAst {
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),
@@ -3084,6 +3086,7 @@ mod tests {
             "if (done) {\n  x = 3;\n  return x;\n}"
         };
         ProjectAst {
+            manifests: Vec::new(),
             root: String::new(),
             files: vec![FileAst {
                 path: path.to_string(),

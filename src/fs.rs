@@ -50,21 +50,21 @@ pub struct RustSourceFile {
 }
 
 pub fn discover_python_files(root: &Path) -> Result<Vec<PythonSourceFile>> {
-    Ok(discover(root, |path| has_extension(path, &["py"]))?
+    Ok(discover(root, None, |path| has_extension(path, &["py"]))?
         .into_iter()
         .map(|(absolute_path, relative_path)| PythonSourceFile { absolute_path, relative_path })
         .collect())
 }
 
 pub fn discover_typescript_files(root: &Path) -> Result<Vec<TypeScriptSourceFile>> {
-    Ok(discover(root, is_typescript_source)?
+    Ok(discover(root, None, is_typescript_source)?
         .into_iter()
         .map(|(absolute_path, relative_path)| TypeScriptSourceFile { absolute_path, relative_path })
         .collect())
 }
 
 pub fn discover_rust_files(root: &Path) -> Result<Vec<RustSourceFile>> {
-    Ok(discover(root, |path| has_extension(path, &["rs"]))?
+    Ok(discover(root, None, |path| has_extension(path, &["rs"]))?
         .into_iter()
         .map(|(absolute_path, relative_path)| RustSourceFile { absolute_path, relative_path })
         .collect())
@@ -73,7 +73,11 @@ pub fn discover_rust_files(root: &Path) -> Result<Vec<RustSourceFile>> {
 /// Walks `root` and returns `(absolute, root-relative)` paths of the files `wanted` accepts,
 /// sorted by relative path. Honors `.gitignore`, `.git/info/exclude` and the global gitignore
 /// (also outside a git repository), and does not descend into hidden directories.
-fn discover(root: &Path, wanted: impl Fn(&Path) -> bool) -> Result<Vec<(PathBuf, String)>> {
+fn discover(
+    root: &Path,
+    max_depth: Option<usize>,
+    wanted: impl Fn(&Path) -> bool,
+) -> Result<Vec<(PathBuf, String)>> {
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize analysis root {}", root.display()))?;
@@ -81,6 +85,7 @@ fn discover(root: &Path, wanted: impl Fn(&Path) -> bool) -> Result<Vec<(PathBuf,
     let mut files = Vec::new();
     for entry in WalkBuilder::new(&root)
         .require_git(false)
+        .max_depth(max_depth)
         .sort_by_file_name(|left, right| left.cmp(right))
         .filter_entry(should_descend)
         .build()
@@ -114,6 +119,20 @@ fn discover(root: &Path, wanted: impl Fn(&Path) -> bool) -> Result<Vec<(PathBuf,
 
     files.sort_by(|left, right| left.1.cmp(&right.1));
     Ok(files)
+}
+
+/// Finds files named exactly one of `names` under `root`, as `(absolute, root-relative)` paths.
+/// `max_depth` of `Some(1)` looks only at the directory itself.
+pub fn discover_files_named(
+    root: &Path,
+    names: &[&str],
+    max_depth: Option<usize>,
+) -> Result<Vec<(PathBuf, String)>> {
+    discover(root, max_depth, |path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| names.contains(&name))
+    })
 }
 
 fn has_extension(path: &Path, extensions: &[&str]) -> bool {
